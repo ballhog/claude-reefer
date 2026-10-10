@@ -1,0 +1,1 @@
+*/15 * * * * root /opt/reefcore/reefchem.py pull --hours 2 >/dev/null 2>&1

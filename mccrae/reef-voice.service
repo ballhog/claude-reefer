@@ -1,0 +1,13 @@
+[Unit]
+Description=Claude Reefer voice endpoint (iPhone Action button)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment=HOME=/root
+ExecStart=/usr/bin/python3 /root/reef-log/voice.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

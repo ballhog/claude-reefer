@@ -1,0 +1,1 @@
+*/5 * * * * root /opt/reefcore/hydros-pull.py pull >/dev/null 2>&1

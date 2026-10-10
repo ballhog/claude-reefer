@@ -1,0 +1,6 @@
+*.env
+*.token
+*.bak*
+__pycache__/
+*.pyc
+state/

@@ -1,0 +1,12 @@
+[Unit]
+Description=Reef Log Telegram bot listener (buttons, hand tests, replies)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /root/reef-log/tg.py listen
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

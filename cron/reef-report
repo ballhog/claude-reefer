@@ -1,0 +1,1 @@
+   25 6 * * * root /opt/reefcore/reefchem.py pull --hours 26 >/dev/null 2>&1; /opt/reefcore/reefchem.py report > /root/reef-lab/data/reports/$(date +\%F).txt 2>&1

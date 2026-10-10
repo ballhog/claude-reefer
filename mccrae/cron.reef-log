@@ -1,0 +1,2 @@
+30 6 * * * root /root/reef-log/reef-log.sh >/dev/null 2>&1
+0 7 1 * * root /root/reef-log/monthly-review.sh >/dev/null 2>&1
