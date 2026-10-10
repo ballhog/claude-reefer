@@ -206,7 +206,7 @@ v0.2.0, 0.3.0 in progress; see README/CHANGELOG there). Config `/etc/nz-home.env
 | GHL ProfiLux | local GHL API, TCP 10002, `ghl-pull.py` | `FLOWSENSOR[n] ACTFLOW` (L/h), `SENSOR[n] ACTVALUE`; firmware echoes the last value for invalid attributes, so reads are marker-checked. NACK -4 unknown resource, -5 unknown attribute, -101 index out of range |
 
 GHL flow labels (`ghl-labels.txt`, Joe's best guess): flow 0 = 320 return, 2/3 = 200 return A/B,
-1 reads 0. GHL sensor slots: 0 tank temp, 6 room temp, 7 room humidity; 1, 8, 9 unknown; 2-5 empty.
+1 reads 0. GHL sensor slots: 0 tank temp, 6 room temp, 7 room humidity, 8 200 temp; 1, 9 pH inputs (unused); 2-5 empty.
 
 ---
 
@@ -232,7 +232,7 @@ Sent once when it starts, reminded every 12 h, short "cleared" line when it ends
 Hydros feed to be fresh before building the report.
 
 **GHL sensor slots (Joe 2026-10-10):** slot 0 = tank temp (`temp_ghl`), 6 = room temp (`room_temp_ghl`),
-7 = room humidity (`humidity`, %); no salinity probe on the GHL. Mapped in `reef-baselines.md` (`ghl:ghl_sN`);
+7 = room humidity (`humidity`, %), 8 = 200 peninsula temp (`temp_200`); 1 and 9 are pH inputs with no probe or an old one (ignored); no salinity probe on the GHL. Mapped in `reef-baselines.md` (`ghl:ghl_sN`);
 they show as gauges and in the report.
 
 ---
