@@ -6,7 +6,7 @@ The home page (nz-home) is its own repo: `ballhog/nz-home`.
 ## Layout
 | Folder | Runs on | What |
 |---|---|---|
-| `reefcore/` | CT 101 reefcore, `/opt/reefcore/` | `reefchem.py` (all the math + the morning report), `hydros-pull.py` (Hydros outputs), `ato-watch.py` (ATO top-off runs, 15 s), `ghl-pull.py` (GHL ProfiLux flows + sensors), old `reef-digest.sh` / `llm-bench.py` (parked) |
+| `reefcore/` | CT 101 reefcore, `/opt/reefcore/` | `reefchem.py` (all the math + the morning report), `hydros-pull.py` (Hydros outputs), `ato-watch.py` (ATO top-off runs, 15 s), `ghl-pull.py` (GHL ProfiLux flows + sensors), `reef-alerts.py` (trend alerts + feed watchdog), `morning-report.sh` (06:25 report, waits for Hydros), old `reef-digest.sh` / `llm-bench.py` (parked) |
 | `mccrae/` | CT 103 mccrae, `/root/reef-log/` | `reef-log.sh` (06:30 daily log via headless Claude Code), `prompt.md`, `tg.py` (Telegram listener: tests, water changes, RO/DI, corals, livestock, maintenance, jugs, photos, questions), `voice.py` (iPhone voice endpoint), `lookback.py` (fingerprints + similar past days), `backfill.py`, monthly review, systemd units, `order_import.py` (coral from an order email) |
 | `cron/` | CT 101 | the reefcore cron jobs |
 

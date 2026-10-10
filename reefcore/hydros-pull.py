@@ -28,6 +28,8 @@ def pull():
     import subprocess   # GHL ProfiLux logger rides on this 5-min cron (see ghl-pull.py); independent of the Hydros feed
     subprocess.Popen([sys.executable, "/opt/reefcore/ghl-pull.py", "pull"], start_new_session=True,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.Popen([sys.executable, "/opt/reefcore/reef-alerts.py", "run"], start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)   # trend alerts + feed watchdog
     with urllib.request.urlopen(LSSS, timeout=30) as r:
         live = json.load(r)
     age = live.get("last_update_age_s")

@@ -49,7 +49,7 @@ def baselines():
         except ValueError:
             continue
         probe, source = (None if c[1] in ("", "-") else c[1]), "apex"
-        if probe and ":" in probe and probe.split(":", 1)[0] in ("apex", "hydros"):
+        if probe and ":" in probe and probe.split(":", 1)[0] in ("apex", "hydros", "ghl"):
             source, probe = probe.split(":", 1)
         out[c[0]] = {"probe": probe, "source": source, "unit": c[2], "low": lo, "high": hi}
     return out

@@ -807,12 +807,39 @@ def _handle(token, chat, updates, lines):
             lines.append(f"[{ts}] {text}" + (f"  [manual water change logged: {gal:g} gal]" if gal else ""))
 
 
+OUTBOX = "/mnt/reef-lab/data/outbox/alerts.jsonl"     # reefcore reef-alerts.py queues alerts here; we send them
+
+
+def flush_outbox(token, chat):
+    """Send alerts queued by reefcore (it has no Telegram token). Rename first so nothing is sent twice."""
+    if not os.path.exists(OUTBOX) or os.path.getsize(OUTBOX) == 0:
+        return
+    work = OUTBOX + f".sending-{int(time.time())}"
+    try:
+        os.rename(OUTBOX, work)
+    except OSError:
+        return
+    for line in open(work):
+        try:
+            text = json.loads(line).get("text", "")
+        except ValueError:
+            continue
+        if text:
+            soft(token, "sendMessage", {"chat_id": chat, "text": text})
+    os.makedirs(os.path.dirname(OUTBOX) + "/sent", exist_ok=True)
+    os.rename(work, os.path.dirname(OUTBOX) + "/sent/" + os.path.basename(work))
+
+
 def listen():
     token, chat = env()
     while True:
         try:
             open("/mnt/reef-lab/data/.bot-alive", "w").write(str(int(time.time())))
         except OSError:
+            pass
+        try:
+            flush_outbox(token, chat)
+        except Exception:
             pass
         offset = int(open(OFFSET).read().strip()) if os.path.exists(OFFSET) else 0
         try:

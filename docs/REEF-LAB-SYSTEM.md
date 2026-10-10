@@ -206,7 +206,34 @@ v0.2.0, 0.3.0 in progress; see README/CHANGELOG there). Config `/etc/nz-home.env
 | GHL ProfiLux | local GHL API, TCP 10002, `ghl-pull.py` | `FLOWSENSOR[n] ACTFLOW` (L/h), `SENSOR[n] ACTVALUE`; firmware echoes the last value for invalid attributes, so reads are marker-checked. NACK -4 unknown resource, -5 unknown attribute, -101 index out of range |
 
 GHL flow labels (`ghl-labels.txt`, Joe's best guess): flow 0 = 320 return, 2/3 = 200 return A/B,
-1 reads 0. GHL sensor slots 0-9 not named yet (0/6/8 temps, 7 likely salinity/conductivity).
+1 reads 0. GHL sensor slots: 0 tank temp, 6 room temp, 7 room humidity; 1, 8, 9 unknown; 2-5 empty.
+
+---
+
+## 7b. Alerts and the feed watchdog (added 2026-10-10)
+
+`/opt/reefcore/reef-alerts.py`, started every 5 min by `hydros-pull.py`, checks at most every 15 min and queues
+messages to `reef_lab/data/outbox/alerts.jsonl`; the Reef Log bot listener on mccrae sends them ("Reef alert: …").
+Not a replacement for controller alarms.
+
+| Alert | Fires when | Clears when |
+|---|---|---|
+| Feed silent (Apex / Hydros / GHL) | no reading for 30 min | readings resume |
+| Flow low | a GHL return line under 80% of its 7-day median for a full hour | back above |
+| Salinity high | 3 h median within 0.3 ppt of the top of the range | median drops |
+| Jug low | a dosing jug at 2 days or less (from `recipes.md`) | 'mixed …' logged |
+| Trident stalled | no new result for 12 h (alk) / 30 h (Ca, Mg) | new results |
+
+Sent once when it starts, reminded every 12 h, short "cleared" line when it ends. Quiet hours 22:00-07:00
+(held, then sent at 07:00 if still active). State: `reef_lab/data/alerts-state.json`.
+`reef-alerts.py check` prints what is active without sending anything.
+
+**Morning report:** the 06:25 cron now runs `/opt/reefcore/morning-report.sh`, which waits up to 15 min for the
+Hydros feed to be fresh before building the report.
+
+**GHL sensor slots (Joe 2026-10-10):** slot 0 = tank temp (`temp_ghl`), 6 = room temp (`room_temp_ghl`),
+7 = room humidity (`humidity`, %); no salinity probe on the GHL. Mapped in `reef-baselines.md` (`ghl:ghl_sN`);
+they show as gauges and in the report.
 
 ---
 
