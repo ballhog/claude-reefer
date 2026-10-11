@@ -340,6 +340,58 @@ def save_photo(token, msg):
     return path
 
 
+STATUS_RE = re.compile(r"^\s*(connection |system |feed |feeds |reef |tank )?(status|feeds?|connections?)\s*[?.!]*\s*$", re.I)
+QUESTION_RE = re.compile(r"^\s*(what|what's|whats|how|how's|hows|why|when|where|which|who|is|are|can|could|should|"
+                         r"does|do|did|will|would|any|ask|tell me|show me|explain)\b", re.I)
+
+
+def quick_status():
+    """Answer 'status' in a second from stored data. No Claude run."""
+    import sqlite3
+    now = time.time()
+    out = []
+    try:
+        d = sqlite3.connect("file:/mnt/reef-lab/data/reefchem.db?mode=ro", uri=True, timeout=10)
+        last = dict(d.execute("SELECT source, MAX(ts) FROM readings WHERE ts > ? GROUP BY source",
+                              (now - 7 * 86400,)).fetchall())
+
+        def val(src_, param):
+            r = d.execute("SELECT value, ts FROM readings WHERE source=? AND param=? ORDER BY ts DESC LIMIT 1",
+                          (src_, param)).fetchone()
+            return r[0] if r and now - r[1] < 3 * 3600 else None
+        for name, key in (("Apex", "apex"), ("GHL", "ghl"), ("Hydros", "hydros")):
+            t = last.get(key)
+            if not t:
+                out.append(f"❌ {name}: no data in 7 days")
+                continue
+            age = (now - t) / 60
+            mark = "✅" if age < 20 else ("⚠️" if age < 120 else "❌")
+            when = f"{age:.0f} min ago" if age < 120 else f"{age / 60:.1f} h ago ({time.strftime('%H:%M', time.localtime(t))})"
+            out.append(f"{mark} {name}: last reading {when}")
+        vals = []
+        for label, s, p, fmt in (("tank", "ghl", "temp_ghl", "{:.2f}°C"), ("200", "ghl", "temp_200", "{:.2f}°C"),
+                                 ("pH", "apex", "ph", "{:.2f}"), ("sal", "hydros", "salinity", "{:.1f}"),
+                                 ("320 ret", "ghl", "ghl_flow0", "{:.0f} L/h"),
+                                 ("200 A", "ghl", "ghl_flow2", "{:.0f} L/h"), ("200 B", "ghl", "ghl_flow3", "{:.0f} L/h")):
+            v = val(s, p)
+            if v is not None:
+                vals.append(f"{label} {fmt.format(v)}")
+        if vals:
+            out.append("Now: " + " · ".join(vals))
+    except Exception as e:
+        out.append(f"⚠️ Couldn't read the data store: {e}")
+    try:
+        st = json.load(open("/mnt/reef-lab/data/alerts-state.json"))
+        act = sorted(st.get("active", {}))
+        out.append("Open alerts: " + (", ".join(act) if act else "none"))
+        lr = st.get("last_run")
+        if lr and now - lr > 1800:
+            out.append(f"⚠️ Alert checker last ran {(now - lr) / 60:.0f} min ago")
+    except Exception:
+        pass
+    return "\n".join(out)
+
+
 ASK_LOCK = threading.Lock()
 ASK_PROMPT = """Joe asked you a question on Telegram about his reef. Answer it like a knowledgeable reef friend:
 direct, short (under 150 words), plain text, no markdown headers. He has kept reefs for 20+ years.
@@ -760,7 +812,10 @@ def _handle(token, chat, updates, lines):
             lines.append(f"[{ts}] hand test logged: {done}")
             soft(token, "sendMessage", {"chat_id": chat, "text": f"✅ Hand test logged: {done}. "
                                        "It shows up in the report within 15 minutes."})
-        elif "?" in text:
+        elif STATUS_RE.match(text):
+            lines.append(f"[{ts}] {text}  [status asked]")
+            soft(token, "sendMessage", {"chat_id": chat, "text": quick_status()})
+        elif "?" in text or QUESTION_RE.match(text):
             recent = [pth for tt, g, pth in RECENT_PHOTOS if time.time() - tt < 600]
             lines.append(f"[{ts}] {text}")
             ask(token, chat, text, recent)
@@ -805,6 +860,9 @@ def _handle(token, chat, updates, lines):
                      f"💧 Manual water change logged: {gal:g} gal at {ts[11:]}. "
                      "Temperature during it is left out of the stats, and it goes in the log as an event."})
             lines.append(f"[{ts}] {text}" + (f"  [manual water change logged: {gal:g} gal]" if gal else ""))
+            if not gal:
+                soft(token, "sendMessage", {"chat_id": chat, "text":
+                     "📝 Noted in today's log. (To ask me something, end it with ? or say \"status\".)"})
 
 
 OUTBOX = "/mnt/reef-lab/data/outbox/alerts.jsonl"     # reefcore reef-alerts.py queues alerts here; we send them
