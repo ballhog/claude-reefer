@@ -16,6 +16,11 @@ import socket, sqlite3, sys, time
 IP, PORT = "10.0.0.215", 10002
 DB = "/root/reef-lab/data/reefchem.db"
 FLOWS, SENSORS = 4, 10
+# Stored name ghl_flowN is the LOGICAL line, not the physical port, so history and 7-day medians stay
+# continuous when plugs move. 2026-10-10 PLM-WiFiLAN card swap shuffled the plugs; Joe confirmed
+# port 2 = 320 return, ports 0/1 = the two 200 returns (A/B assigned by pre-swap levels ~450/~405).
+#   logical: ghl_flow0 320 return | ghl_flow1 unused | ghl_flow2 200 return A | ghl_flow3 200 return B
+PORT_MAP = {0: 2, 1: 3, 2: 0, 3: 1}          # logical index -> physical FLOWSENSOR port
 
 
 class Session:
@@ -85,7 +90,7 @@ def read():
             if v is not None:
                 vals[f"ghl_s{i}"] = v
         for i in range(FLOWS):
-            v = g.get(f"GET FLOWSENSOR[{i}] ACTFLOW")
+            v = g.get(f"GET FLOWSENSOR[{PORT_MAP[i]}] ACTFLOW")
             if v is not None:
                 vals[f"ghl_flow{i}"] = v
     finally:
