@@ -2,8 +2,8 @@
 """GHL ProfiLux logger (reefcore CT 101). stdlib only.
 
 Reads the GHL local API v1.1 (10.0.0.215:10002, fw 7.52, API set to full access; this script only GETs) and stores readings in reefchem.db
-(table readings, source 'ghl'): the 4 flow sensors (param ghl_flow0..3, L/h) and the 10 sensor
-slots (param ghl_s0..9, units unknown until Joe names them). Started every 5 min by hydros-pull.py.
+(table readings, source 'ghl'): the 4 flow sensors (param ghl_flow0..3, L/h) and the sensor
+slots (param ghl_s0..15, units unknown until Joe names them). Started every 5 min by hydros-pull.py.
 
 fw 7.52 answers NACK properly for missing slots, so the old echo/marker check is gone.
 All reads share one TCP connection (see Session).
@@ -15,7 +15,7 @@ import socket, sqlite3, sys, time
 
 IP, PORT = "10.0.0.215", 10002
 DB = "/root/reef-lab/data/reefchem.db"
-FLOWS, SENSORS = 4, 10
+FLOWS, SENSORS = 4, 16   # 10/11 = humidity card in the Expansion Box (2026-10-11)
 # Stored name ghl_flowN is the LOGICAL line, not the physical port, so history and 7-day medians stay
 # continuous when plugs move. 2026-10-10 PLM-WiFiLAN card swap shuffled the plugs; Joe confirmed
 # port 2 = 320 return, ports 0/1 = the two 200 returns (A/B assigned by pre-swap levels ~450/~405).
