@@ -38,6 +38,83 @@ shut down, not needed.
 
 ---
 
+## 0. How to use it (Joe's quick guide, rev 2026-10-12)
+
+The everyday "what does what" in plain words. Technical detail is in the sections after this one.
+
+### The home page (`nz.home.arpa`)
+- **Gauges** fit the screen (wall monitor, the 24" reef PC, laptop, iPad, phone with tabs at the bottom). A red
+  top edge = outside your range or a stale test.
+- **Tap any gauge** for its history: line, your normal range shaded, and markers for water changes, maintenance and
+  mixed jugs. 24 H / 7 D / 30 D buttons; drag across the chart to read exact values. Esc or ✕ closes.
+- **Live:** the page updates itself when new data lands (flows every minute, probes every 5 min). No need to reload.
+- **Alert strip** at the top: reef alerts in one line; tap to open them all.
+- **°C / °F** buttons top right (remembered per device).
+- **Ask Claude** box: questions about what's on the page. Self test (left) runs 10 pipeline checks.
+
+### Maintenance page (`nz.home.arpa/maintenance`)
+- **The drawing** is the whole plant: 200 upstairs, 320 display, 300 sump with returns, roller, skimmer, heaters,
+  probes, ATO, X10 dosing heads, Trident, lights. Saltwater is dark blue, RO/DI light blue; the flow dashes move
+  faster when the GHL sees more flow.
+- **Glows:** blue = running (return pumps from GHL flow, everything else from Hydros power). **Red** = needs you now
+  (overdue task or a return line under 80% of normal). **Amber** = soon (task due within 7 days, or a dosing jug at
+  3 days or less). The glow traces the equipment's own outline. Calm screen = nothing needs you.
+- **Tap equipment** to light up its panel; tap again (or tap the panel) for the pop-up.
+- **Doing a task:** in the pop-up, **press and hold COMPLETE** (about 1 s). Did it another day? Tap *done earlier*,
+  pick the date, then hold COMPLETE. An **Undo** toast shows for 10 s. Telegram/voice ("cleaned the skimmer cup")
+  writes the same log.
+- **BY DATA:** some tasks also watch sensors and can come due before the calendar says so:
+  return pumps (flow down 10% from their clean level = due, 20% = overdue), skimmer cup (cup-full sensor tripped),
+  filter roller (chamber overfill sensor), RO/DI resin (product TDS 1 ppm or more). The pop-up shows the sensor reason
+  under the task.
+- **Dotted-underlined values** in panels and pop-ups open their history chart (Hydros outputs show watts/on-off).
+- **Ticker** along the bottom: overdue/due tasks, return flows vs normal, salinity, alk, Ca, Mg, temps, pH, humidity,
+  Hydros outputs on, last ATO run, jug days left. Hover to pause.
+- **Data feed** (right, wide screens): real report and log lines in Aurebesh.
+- `?pulsetest` on the address shows what alert glows look like.
+
+### Recipes / dosing station (`nz.home.arpa/recipes`)
+- Jugs (Alk, Part C, Calcium, Mg mix), salt and RO/DI barrels with fill levels from the last mix date.
+  Tap a vessel for its recipe card. The **daily dosing** gauges show what the doses add per day and the Ca:alk balance.
+- Mixing-barrel sensors in the salt card open their history.
+
+### Telegram (Reef Log bot) and voice
+- **status** (no "?" needed): instant snapshot of feeds and alerts.
+- Questions: just ask ("how's alk this week"); Claude answers from the report, profile, recipes and logs.
+- Logging: `alk 7.4`, `ca 430 mg 1350`, `changed 20 gallons`, `added 10 gal rodi`, `mixed alk`, `cleaned skimmer`,
+  `replaced filter roll`, `what's due`, `jugs`, coral and livestock lines (`new coral …`, `C-012 par 180`,
+  `new fish …`), photos with a caption. Anything else is noted in today's log and acknowledged.
+- **Morning:** report at 06:25, Claude Reefer daily log to Telegram at 06:30 (👍/👎 buttons).
+- **Alerts** ("Reef alert: …"): feed silent, return flow low, salinity near the top, jug low, Trident stalled, plus
+  **instrument watch**: probe fault (impossible reading), frozen sensor (same value 6 h), probe drift (the gap between
+  two probes changed), Trident skipped an alk run (it learned the run times: ~00:20, 06:15, 12:40, 18:20).
+  Sent once, reminded every 12 h, "cleared" when fixed. Quiet 22:00-07:00 (held until morning).
+- **Voice:** iPhone Shortcut "Reefer" (works on Tailscale away from home).
+
+### The reef PC by the tank
+- Dedicated Windows PC: Edge in kiosk mode at login (shortcut in the Startup folder). **Alt+F4** exits.
+
+### Handy links
+- Any page + `?chart=salinity` (or any parameter, e.g. `ghl_flow0`) opens that history directly.
+  Add `&days=30` for a month. Hydros output: `?chart=Skimmer&src=hydros_out`.
+- `?nolive` turns live updates off (used for screenshots).
+
+### GHL ProfiLux notes
+- Wired at 10.0.0.215 (PLM-WiFiLAN card). GHL API at full access, but every script only reads; nothing writes
+  to a controller without your OK.
+- Expansion cards: **configure them in the ProfiLux first, then move them to the Expansion Box** (the humidity card
+  on the 200 is sensor 10 = room temp, 11 = humidity).
+- Flow ports since the card swap: port 2 = 320 return, 0/1 = 200 returns A/B, 3 empty. History keeps the line names.
+- The GHL clock runs 1 h slow until DST is enabled on it.
+
+### When something looks wrong
+- "Hydros feed silent": refresh the Hydros feed on the LSSS.
+- A page not updating: it re-connects on its own within ~10 s; reload if not.
+- Trident alerts after an unplug: check power, reagents and waste; results resume on their own.
+- Anything odd: Telegram `status`, or Self test on the home page.
+
+---
+
 ## 1. Big picture
 
 ```
