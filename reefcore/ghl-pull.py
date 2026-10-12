@@ -3,7 +3,8 @@
 
 Reads the GHL local API v1.1 (10.0.0.215:10002, fw 7.52, API set to full access; this script only GETs) and stores readings in reefchem.db
 (table readings, source 'ghl'): the 4 flow sensors (param ghl_flow0..3, L/h) and the sensor
-slots (param ghl_s0..15, units unknown until Joe names them). Started every 5 min by hydros-pull.py.
+slots (param ghl_s0..15). Cron every minute: `ghl-pull.py tick` stores the flows each minute (live screens)
+and the sensor slots every 5 min. `pull` stores everything once.
 
 fw 7.52 answers NACK properly for missing slots, so the old echo/marker check is gone.
 All reads share one TCP connection (see Session).
@@ -111,6 +112,8 @@ def main():
             print(f"{k:10} {v:g}")
         return
     ts = int(time.time())
+    if cmd == "tick" and time.localtime(ts).tm_min % 5:
+        vals = {k: v for k, v in vals.items() if k.startswith("ghl_flow")}   # sensor slots only every 5 min
     db = sqlite3.connect(DB, timeout=30)
     db.executemany("INSERT OR IGNORE INTO readings VALUES (?,?,?,?,?)",
                    [(ts, "ghl", k, k, v) for k, v in vals.items()])

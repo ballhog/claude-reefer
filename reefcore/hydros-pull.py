@@ -5,6 +5,7 @@ The LSSS stores Hydros *inputs* in InfluxDB but not *outputs* (pumps, lights, sk
 dosers). This snapshots every output from the LSSS live endpoint into
 /root/reef-lab/data/hydros.db so on/off history and power draw are kept.
 
+  hydros-pull.py fast        outputs only (cron every minute, for the live screens)
   hydros-pull.py pull        check every output; store only changes + hourly heartbeat (cron every 5 min)
   hydros-pull.py status      print the latest snapshot
   hydros-pull.py changes [H] on/off changes in the last H hours (default 24)
@@ -24,19 +25,19 @@ def db():
     return c
 
 
-def pull():
-    import subprocess   # GHL ProfiLux logger rides on this 5-min cron (see ghl-pull.py); independent of the Hydros feed
-    subprocess.Popen([sys.executable, "/opt/reefcore/ghl-pull.py", "pull"], start_new_session=True,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.Popen([sys.executable, "/opt/reefcore/reef-alerts.py", "run"], start_new_session=True,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)   # trend alerts + feed watchdog
+def pull(fast=False):
+    import subprocess   # GHL ProfiLux has its own every-minute cron line (ghl-pull.py tick)
+    if not fast:
+        subprocess.Popen([sys.executable, "/opt/reefcore/reef-alerts.py", "run"], start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)   # trend alerts + feed watchdog
     with urllib.request.urlopen(LSSS, timeout=30) as r:
         live = json.load(r)
     age = live.get("last_update_age_s")
     if not live.get("connected") or age is None or age > 900:
         raise SystemExit(f"hydros feed stale or disconnected (age {age} s)")
     import subprocess   # ATO top-off watcher: 15 s polling for this 5-min window (see ato-watch.py)
-    subprocess.Popen([sys.executable, "/opt/reefcore/ato-watch.py", "watch"], start_new_session=True,
+    if not fast:
+      subprocess.Popen([sys.executable, "/opt/reefcore/ato-watch.py", "watch"], start_new_session=True,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     ts = int(time.time())
     rows = []
@@ -104,6 +105,8 @@ if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "pull":
         pull()
+    elif cmd == "fast":      # every minute from cron: outputs only (live screens)
+        pull(fast=True)
     elif cmd == "status":
         status()
     elif cmd == "changes":

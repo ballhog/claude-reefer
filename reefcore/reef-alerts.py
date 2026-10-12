@@ -8,6 +8,8 @@ Telegram token). Not a replacement for controller alarms: these are slow, trend-
 Checks: Apex / Hydros / GHL feed silent > 30 min; a GHL return line under 80% of its 7-day median for
 an hour; salinity (3 h median) within 0.3 ppt of the top of its range; a dosing jug at <= 2 days;
 a Trident test that stopped producing new results.
+Instrument watch (2026-10-12): impossible readings (probe fault), sensors frozen for 6 h, probe-pair
+offset drift vs its 14-day normal, and a missed Trident alk run (learned run times).
 
 Each alert is sent once when it starts, reminded every 12 h while it lasts, and gets a short
 "cleared" line when it ends. Quiet hours 22:00-07:00: nothing is sent; anything still active at 07:00
@@ -96,7 +98,86 @@ def checks(db, now):
                 act[f"trident:{p}"] = (f"🔬 Trident: no new {p} result in {rc.age(now - pts[-1][0])}. "
                                        "Check reagents, waste and the Trident status.",
                                        f"✅ Trident {p} results coming in again.")
+    try:
+        instrument_checks(db, now, act)
+    except Exception as e:                       # never let a new check break the old ones
+        act["inst:error"] = (f"🛠️ instrument watch failed: {e}", "✅ instrument watch running again.")
     return act
+
+
+# ---------- instrument watch (Group 1, 2026-10-12): the instruments themselves, not the tank ----------
+MOVERS = [("temp", "apex", "Apex temp"), ("temp_hydros", "hydros", "Hydros sump temp"), ("ph", "apex", "Apex pH"),
+          ("ph_hydros", "hydros", "Hydros pH"), ("salinity", "hydros", "Hydros salinity"),
+          ("temp_ghl", "ghl", "GHL tank temp"), ("temp_200", "ghl", "GHL 200 temp"),
+          ("ghl_flow0", "ghl", "320 return flow"), ("ghl_flow2", "ghl", "200 return A flow"), ("ghl_flow3", "ghl", "200 return B flow")]
+PAIRS = [("ph", "apex", "ph_hydros", "hydros", "pH: Apex vs Hydros", 0.15, ""),
+         ("temp", "apex", "temp_hydros", "hydros", "temp: Apex vs Hydros", 0.5, " °C"),
+         ("temp", "apex", "temp_ghl", "ghl", "temp: Apex vs GHL", 0.5, " °C")]
+SANE = {"ph": (6.0, 9.5), "ph_hydros": (6.0, 9.5), "salinity": (25, 40), "temp": (15, 35), "temp_hydros": (15, 35),
+        "temp_ghl": (15, 35), "temp_200": (15, 35)}
+
+
+def _hourly(db, p, src, since, now):
+    b = {}
+    for t, v in rc.series(db, p, src, since, now):
+        b.setdefault(t // H, []).append(v)
+    return {k: sum(v) / len(v) for k, v in b.items()}
+
+
+def instrument_checks(db, now, act):
+    feeds_down = {k.split(":")[1] for k in act if k.startswith("feed:")}
+    # 1. impossible values -> probe fault, not a tank alarm
+    for p, (lo, hi) in SANE.items():
+        src = "ghl" if p in ("temp_ghl", "temp_200") else "hydros" if p.endswith("_hydros") or p == "salinity" else "apex"
+        r = db.execute("SELECT value, ts FROM readings WHERE param=? AND source=? ORDER BY ts DESC LIMIT 1", (p, src)).fetchone()
+        if r and now - r[1] < 2 * H and not (lo <= r[0] <= hi):
+            act[f"inst:range:{p}"] = (f"🛠️ {p} reads {r[0]:g}, outside anything a reef can be ({lo:g}-{hi:g}). Probably the probe "
+                                      "or its cable, not the tank: check the probe before acting on it.",
+                                      f"✅ {p} reading is plausible again.")
+    # 2. stuck sensor: no change at all for 6 h on something that normally moves
+    for p, src, name in MOVERS:
+        if src in feeds_down or f"inst:range:{p}" in act:
+            continue
+        pts = [v for _, v in rc.series(db, p, src, now - 6 * H, now)]
+        if len(pts) < 10 or max(pts) != min(pts) or (p.startswith("ghl_flow") and pts[-1] == 0):
+            continue
+        wk = [v for _, v in rc.series(db, p, src, now - 7 * D, now - 6 * H)]
+        if len(wk) > 50 and max(wk) - min(wk) > 0:
+            act[f"inst:stuck:{p}"] = (f"🛠️ {name} has read exactly {pts[-1]:g} for 6 h; it normally moves. "
+                                      "Sensor or its feed may be frozen.", f"✅ {name} is moving again.")
+    # 3. probe drift: the OFFSET between two probes moved away from its 14-day normal
+    for a, sa, b, sb, name, lim, unit in PAIRS:
+        if sa in feeds_down or sb in feeds_down:
+            continue
+        ha, hb = _hourly(db, a, sa, now - 14 * D, now), _hourly(db, b, sb, now - 14 * D, now)
+        both = sorted(set(ha) & set(hb))
+        base = [ha[k] - hb[k] for k in both if k < (now - D) // H]
+        cur = [ha[k] - hb[k] for k in both if k >= (now - 6 * H) // H]
+        if len(base) < 24 or len(cur) < 3:
+            continue
+        b0, c0 = statistics.median(base), statistics.median(cur)
+        if abs(c0 - b0) > lim:
+            act[f"inst:drift:{a}-{b}"] = (f"🛠️ Probe drift, {name}: the gap is now {c0:+.2f}{unit}, normally {b0:+.2f}{unit}. "
+                                          "One of the two probes is drifting: calibrate or check against a hand test.",
+                                          f"✅ {name} gap back to normal ({c0:+.2f}{unit}).")
+    # 4. Trident alk: learn its daily run times; flag a missed run within ~2 h instead of waiting 12 h
+    pts = rc.changes(rc.series(db, "alk", "apex", now - 14 * D, now))
+    if len(pts) >= 10:
+        mins = [(datetime.fromtimestamp(t).hour * 60 + datetime.fromtimestamp(t).minute) for t, _ in pts]
+        slots = []
+        for m0 in sorted(mins):
+            near = [m for m in mins if abs(m - m0) <= 60]
+            if len(near) >= 5 and all(abs(m0 - s) > 120 for s in slots):
+                slots.append(int(statistics.median(near)))
+        last_t = pts[-1][0]
+        mid = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0).timestamp()
+        due = [mid + s * 60 for s in slots] + [mid - D + s * 60 for s in slots]
+        missed = [t for t in due if t + 2 * H < now and last_t < t - H and now - t < D]
+        if missed and "apex" not in feeds_down:
+            t = max(missed)
+            act["inst:trident:alk"] = (f"🔬 Trident skipped its {datetime.fromtimestamp(t):%H:%M} alk run (last result "
+                                       f"{rc.age(now - last_t)} ago). Check power, reagents and waste.",
+                                       "✅ Trident alk results coming in again.")
 
 
 def main():

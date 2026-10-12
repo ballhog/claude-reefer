@@ -277,6 +277,114 @@ def maintenance(now):
         print("\n".join(recent))
 
 
+def _last_done():
+    """Last-done date per maintenance task id (from data/maintenance.md), as epoch seconds or None."""
+    import re as _re
+    out = {}
+    try:
+        for l in (DATA / "maintenance.md").read_text().splitlines():
+            c = [x.strip() for x in l.strip().strip("|").split("|")]
+            if len(c) >= 4 and _re.match(r"M\d+$", c[0]):
+                out[c[0]] = (datetime.fromisoformat(c[3][:10]).timestamp() if c[3] not in ("", "-") else None)
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+def data_due(db, now):
+    """Maintenance signals from the sensors, alongside the calendar (Group 1, 2026-10-12).
+    Returns {task_id: {"level": "overdue"|"due"|"info", "short": str, "reason": str}}. Script arithmetic only."""
+    import statistics as _st
+    last = _last_done()
+    out = {}
+    # M04 return pumps: each line's 24 h median vs its level in the 3 days after the last cleaning
+    names = {"ghl_flow0": "320 return", "ghl_flow2": "200 return A", "ghl_flow3": "200 return B"}
+    worst, parts = None, []
+    for p, name in names.items():
+        day = [v for _, v in series(db, p, "ghl", now - D)]
+        if len(day) < 12:
+            continue
+        cur = _st.median(day)
+        t0 = last.get("M04")
+        if t0 and now - t0 > 3 * D:
+            base_pts = [v for _, v in series(db, p, "ghl", int(t0), int(t0 + 3 * D))]
+            base, how = (_st.median(base_pts), "after the last cleaning") if len(base_pts) >= 12 else (None, "")
+        else:
+            base, how = None, ""
+        if base is None:                                  # no cleaning logged yet: best daily median of 30 days
+            byday = {}
+            for t, v in series(db, p, "ghl", now - 30 * D):
+                byday.setdefault(t // D, []).append(v)
+            meds = [_st.median(v) for v in byday.values() if len(v) >= 12]
+            if not meds:
+                continue
+            base, how = max(meds), "best day in 30 days"
+        if base <= 0:
+            continue
+        pct = cur / base * 100
+        parts.append(f"{name} {cur:.0f} L/h = {pct:.0f}% of {base:.0f} ({how})")
+        drop = 100 - pct
+        lvl = "overdue" if drop >= 20 else "due" if drop >= 10 else "info"
+        if worst is None or ["info", "due", "overdue"].index(lvl) > ["info", "due", "overdue"].index(worst[0]):
+            worst = (lvl, f"{name} flow down {drop:.0f}%")
+    if worst:
+        out["M04"] = {"level": worst[0], "short": worst[1] if worst[0] != "info" else "flows normal",
+                      "reason": "; ".join(parts)}
+
+    def trips(param, since):
+        pts = series(db, param, "hydros", since)
+        n, prev = 0, None
+        for _, v in pts:
+            on = v >= 0.5
+            if on and prev is False:
+                n += 1
+            prev = on
+        return n, (pts[-1][1] >= 0.5 if pts else None)
+
+    # M01 skimmer cup: the cup-full sensor tripped since the last cleaning (or in 7 days)
+    since = max(now - 7 * D, int(last.get("M01") or 0))
+    n, now_on = trips("1R SkimOverflow", since)
+    if n or now_on:
+        out["M01"] = {"level": "due", "short": "cup-full sensor tripped" if n else "cup-full sensor on",
+                      "reason": f"Hydros '1R SkimOverflow' tripped {n} time(s) since {datetime.fromtimestamp(since):%m-%d}"
+                                + (" and is on now" if now_on else "")}
+    else:
+        out["M01"] = {"level": "info", "short": "cup sensor quiet", "reason": "cup-full sensor has not tripped in 7 days"}
+    # M02 filter roller: chamber overfill sensor (roll out or jammed)
+    since = max(now - 7 * D, int(last.get("M02") or 0))
+    n, now_on = trips("1RFliter Roller", since)
+    if n or now_on:
+        out["M02"] = {"level": "due", "short": "roller chamber overfill",
+                      "reason": f"Hydros '1RFliter Roller' (chamber overfill) tripped {n} time(s) in 7 days"
+                                + (" and is on now" if now_on else "") + ": roll may be out or jammed"}
+    # M14 DI resin: product TDS (Hydros), the high end of the last 3 days of readings above 0
+    tds = sorted(v for _, v in series(db, "tds", "hydros", now - 3 * D) if v > 0)
+    if tds:
+        hi = tds[int(len(tds) * .95) - 1 if len(tds) > 1 else 0]
+        lvl = "overdue" if hi >= 5 else "due" if hi >= 1 else "info"
+        out["M14"] = {"level": lvl, "short": f"TDS {hi:.0f} ppm", "reason": f"product water TDS up to {hi:.1f} ppm in 3 days (resin is spent above 0-1)"}
+    else:
+        out["M14"] = {"level": "info", "short": "TDS 0 ppm", "reason": "product water TDS reads 0 ppm (last 3 days)"}
+    return out
+
+
+def data_due_report(db, now):
+    try:
+        dd = data_due(db, now)
+    except Exception as e:
+        print(f"\nDue by data: unavailable ({e})")
+        return
+    hot = [(k, v) for k, v in sorted(dd.items()) if v["level"] != "info"]
+    print("\nDue by data (sensor signals, alongside the calendar):")
+    if hot:
+        for k, v in hot:
+            print(f"  {v['level'].upper()} {k}: {v['short']} ({v['reason']})")
+    else:
+        print("  nothing flagged by sensors")
+    if "M04" in dd and dd["M04"]["level"] == "info":
+        print(f"  return pumps: {dd['M04']['reason']}")
+
+
 def jugs(now):
     """Dosing jug run-out forecast from data/recipes.md."""
     import re as _re
@@ -563,6 +671,7 @@ def report(db, asof=None):
     switches(db, now)
     equipment(now)
     maintenance(now)
+    data_due_report(db, now)
     jugs(now)
     ph_bump(db, now)
     ghl_flow(db, now)

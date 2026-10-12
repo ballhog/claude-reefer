@@ -1,14 +1,14 @@
 ---
 title: Reef Lab System
-rev: 2026-10-11
-updated: 2026-10-11
+rev: 2026-10-12
+updated: 2026-10-12
 tags: [node-zero, reef-lab, claude-reefer, reef-log, mccrae, reefcore, palomino, nz-home, ghl, hydros]
 ---
 
-# Reef Lab System (rev 2026-10-11)
+# Reef Lab System (rev 2026-10-12)
 
 > Current system overview. Copies of this file also live in Joe's LifeOS vault
-> (`03-Areas/Reef/Reef Lab System/Reef Lab System rev 2026-10-11.md`) and, once copied by Joe, at the root of
+> (`03-Areas/Reef/Reef Lab System/Reef Lab System rev 2026-10-12.md`) and, once copied by Joe, at the root of
 > the `reef` share as `Reef Lab System.md`. The older deep reference (Hermes era) is in
 > `docs/history/how-it-works-2026-10-03.md`.
 
@@ -17,7 +17,9 @@ together. Recipes: `reef_lab/data/recipes.md` (and Joe's vault note `Mixing Note
 
 Secrets are never written here, only where they live.
 
-**What changed since rev 10-10:** GHL ProfiLux now wired (PLM-WiFiLAN card, 10.0.0.215) with the GHL API at
+**What changed in rev 10-12 (upgrade Group 1, plan in the project doc `nz-claude-reefer-upgrade-plan-2026-10-12.md`):** live screens (pages update when data lands; GHL flows and Hydros outputs every minute), tap any number for its history, maintenance by data (return-pump flow drop, skimmer cup sensor, roller overfill, RO/DI TDS; new report section "Due by data"), instrument watch alerts (impossible readings, frozen sensors, probe-pair drift, missed Trident alk run). New index on `readings(param, source, ts)`.
+
+**What changed in rev 10-11:** GHL ProfiLux now wired (PLM-WiFiLAN card, 10.0.0.215) with the GHL API at
 full access; `ghl-pull.py` uses one TCP session; flow plugs re-mapped after the card swap (logical names kept);
 humidity/temp card moved to the Expansion Box on the 200 (slots 10/11). Telegram answers "status" instantly
 and treats questions without "?" as questions. Hydros feed watchdog fixed (Joe, via the LSSS). nz-home: home
@@ -115,7 +117,8 @@ Backups: `reef` and `reef_lab` must be in maximilian's snapshot task and bob's r
 |---|---|---|
 | always | Telegram listener (`reef-log-bot.service`), voice endpoint (`reef-voice.service`) | mccrae |
 | every 15 s (in 5-min windows) | ATO top-off watcher | reefcore |
-| every 5 min | Apex/Hydros into InfluxDB; `hydros-pull.py`; `ghl-pull.py` | LSSS, reefcore |
+| every minute | `ghl-pull.py tick` (flows every minute, sensor slots every 5 min); `hydros-pull.py fast` (outputs) | reefcore (`/etc/cron.d/reefcore-fast`) |
+| every 5 min | Apex/Hydros into InfluxDB; `hydros-pull.py pull` (+ alerts, ATO watcher) | LSSS, reefcore |
 | every 15 min | `reefchem.py pull --hours 2` (also ingests the Telegram inbox) | reefcore |
 | :15 / :45 hourly | palomino ingest: `reef` / `reef_lab` | palomino |
 | 06:25 | pull 26 h + write the day's report | reefcore |
@@ -202,6 +205,11 @@ v0.2.0, 0.3.0 in progress; see README/CHANGELOG there). Config `/etc/nz-home.env
 - **Claude chat** (Haiku, capped key, open on the LAN).
 - LAN and Tailscale only, never through the Cloudflare tunnel.
 
+**Added 2026-10-12 (Group 1):**
+- **Live:** `GET /api/events` (Server-Sent Events). A watcher thread fingerprints reefchem.db, hydros.db, alerts-state.json, maintenance and recipes files every 5 s and pushes what changed; pages refetch only then (60-120 s timer kept as fallback). Works through Caddy (nz.home.arpa). `?nolive` turns it off (headless screenshots stall on an open stream).
+- **History for any number:** `GET /api/series?p=&src=&days=` (points downsampled to ~400, normal band, events: water changes, maintenance log, mixed jugs, hand tests; `src=hydros_out` for Hydros outputs). Shared `/static/nz.js` (`NZ.live`, `NZ.chart`, `NZ.bind`): home gauges, maintenance panel values and pop-up readings, recipes barrel sensors. Deep link: any page `?chart=<param>[&src=&days=&label=]`.
+- **Maintenance by data:** `reefchem.data_due()`; the worse of calendar and sensors sets the task state ("BY DATA · …"), with the sensor reason in the pop-up and the alert glow.
+
 **Added 2026-10-10/11:**
 - **Fit to screen:** the home page never scrolls; gauges shrink through full / sparkline / dial / chip / micro
   modes to fit (wall monitor, the 24" touchscreen by the tank, laptop, iPad Pro, phone with bottom tabs);
@@ -263,7 +271,16 @@ Sent once when it starts, reminded every 12 h, short "cleared" line when it ends
 (held, then sent at 07:00 if still active). State: `reef_lab/data/alerts-state.json`.
 `reef-alerts.py check` prints what is active without sending anything.
 
-**Morning report:** the 06:25 cron now runs `/opt/reefcore/morning-report.sh`, which waits up to 15 min for the
+**Instrument watch (added 2026-10-12)**, same plumbing:
+
+| Alert | Fires when |
+|---|---|
+| Probe fault | a reading outside anything a reef can be (pH < 6 or > 9.5, salinity < 25 or > 40, temp < 15 or > 35 °C) |
+| Frozen sensor | exactly the same value for 6 h on temps, pH, salinity or return flows (which normally move) |
+| Probe drift | the Apex-vs-Hydros pH gap, or Apex-vs-Hydros / Apex-vs-GHL temp gap, moves > 0.15 pH / 0.5 °C from its 14-day median (the usual ~0.25 pH gap itself is not an alert) |
+| Trident missed alk run | its run times are learned (currently ~00:20, 06:15, 12:40, 18:20); a run 2 h overdue fires (the 10-10 unplug would have alerted ~8 h after the last result instead of 12+) |
+
+**Morning report** also has "Due by data" (sensor maintenance signals) since 10-12. The 06:25 cron now runs `/opt/reefcore/morning-report.sh`, which waits up to 15 min for the
 Hydros feed to be fresh before building the report.
 
 **GHL sensor slots (Joe 2026-10-10, updated 10-11):** slot 0 = tank temp (`temp_ghl`), 8 = 200 peninsula temp
@@ -339,6 +356,9 @@ See the repo README ("GitHub and publishing") for both repos, deploy keys and th
 | nz-home login (POST routes open on the LAN) | nz-home `TODO.md` |
 | Maintenance page: Imperial background choice; pass 2 per-equipment blueprints (needs MP40 / gyre / Turbelle mapping) | Joe to choose |
 | Reef PC: console mode (bigger touch targets, idle page rotation) | after the kiosk settles |
+| Upgrade Group 2: login, evening check-in, logging from the screen, supplies forecast (needs stock counts) | next |
+| Upgrade Group 3: normal-day model, before/after per event, power cost (needs $/kWh) | planned |
+| Upgrade Group 4: replay slider, ask the schematic, weekly photo review, controller-action decision | planned |
 | GHL doser ESP32 retrofit (PoE, LSSS family, scales, 4 isolated triggers) | **parked** on the roadmap until the outlet PCB is done and the move |
 | ATO pump flow (1 min into a cup) → gallons evaporated per day | at-home list |
 | Hydros overrides, ORP probe, Apex vs Hydros pH gap ~0.3, D4 Mg regimen, salt batch test | at-home list |
