@@ -1,14 +1,14 @@
 ---
 title: Reef Lab System
-rev: 2026-10-10
-updated: 2026-10-10
+rev: 2026-10-11
+updated: 2026-10-11
 tags: [node-zero, reef-lab, claude-reefer, reef-log, mccrae, reefcore, palomino, nz-home, ghl, hydros]
 ---
 
-# Reef Lab System (rev 2026-10-10)
+# Reef Lab System (rev 2026-10-11)
 
 > Current system overview. Copies of this file also live in Joe's LifeOS vault
-> (`03-Areas/Reef/Reef Lab System/Reef Lab System rev 2026-10-10.md`) and, once copied by Joe, at the root of
+> (`03-Areas/Reef/Reef Lab System/Reef Lab System rev 2026-10-11.md`) and, once copied by Joe, at the root of
 > the `reef` share as `Reef Lab System.md`. The older deep reference (Hermes era) is in
 > `docs/history/how-it-works-2026-10-03.md`.
 
@@ -17,7 +17,16 @@ together. Recipes: `reef_lab/data/recipes.md` (and Joe's vault note `Mixing Note
 
 Secrets are never written here, only where they live.
 
-**What changed since rev 10-09:** Claude Reefer is the only AI voice (Haiku digest and Hermes retired,
+**What changed since rev 10-10:** GHL ProfiLux now wired (PLM-WiFiLAN card, 10.0.0.215) with the GHL API at
+full access; `ghl-pull.py` uses one TCP session; flow plugs re-mapped after the card swap (logical names kept);
+humidity/temp card moved to the Expansion Box on the 200 (slots 10/11). Telegram answers "status" instantly
+and treats questions without "?" as questions. Hydros feed watchdog fixed (Joe, via the LSSS). nz-home: home
+page fits any screen with no scrolling (wall monitor to phone, bottom tabs on phones), sub-pages scroll,
+Recipes became a dosing-station graphic with a daily-dosing gauge panel, Maintenance became an Imperial
+schematic of the whole system with tasks completed right in the pop-up. Lighting recorded in the tank
+profile. Reef PC by the tank runs the home page full screen. GHL doser retrofit parked on the roadmap.
+
+**What changed in rev 10-10 (vs 10-09):** Claude Reefer is the only AI voice (Haiku digest and Hermes retired,
 local LLM retired); always-on Telegram listener + iPhone voice; coral registry with care sheets;
 maintenance, recipes and dosing-jug pages; Hydros outputs and ATO logged; GHL ProfiLux connected
 (flow sensors); new report sections (flow, salinity drift, pH bump, jugs, maintenance); Imperial gauges
@@ -193,6 +202,26 @@ v0.2.0, 0.3.0 in progress; see README/CHANGELOG there). Config `/etc/nz-home.env
 - **Claude chat** (Haiku, capped key, open on the LAN).
 - LAN and Tailscale only, never through the Cloudflare tunnel.
 
+**Added 2026-10-10/11:**
+- **Fit to screen:** the home page never scrolls; gauges shrink through full / sparkline / dial / chip / micro
+  modes to fit (wall monitor, the 24" touchscreen by the tank, laptop, iPad Pro, phone with bottom tabs);
+  small header, alert strip on top. Sub-pages (Corals, Livestock, Recipes, Maint) scroll normally; shared CSS
+  is scoped to `body.home`.
+- **Recipes:** opens on a dosing-station drawing (Alk, Part C, Calcium, Mg mix jugs, salt and RO/DI barrels,
+  fill level from `recipes.md`); tap a vessel for its recipe card. A daily-dosing gauge panel shows what the
+  daily doses add (alk dKH, Ca, Mg ppm/day) and the Ca:alk balance.
+- **Maintenance:** Imperial schematic of the whole plant (200 upstairs, 320 display, 300 sump with returns,
+  roller, skimmer, heaters, probes, ATO, X10 dosing heads, Trident, lights) with leader lines to task panels.
+  Saltwater dark blue, RO/DI light blue; flow animation speed from the GHL flow sensors; running equipment
+  glows (return pumps from GHL flow, the rest from Hydros outputs). Tap equipment to light its panel, tap
+  again for details. Aurebesh feed from real report/log lines.
+- **Complete a task in the pop-up:** hold COMPLETE (or "done earlier" with a date); toast with Undo.
+  `POST /api/maintenance/done` `{id, date?, note?, undo_to?}` updates `maintenance.md` and appends to
+  `maintenance-log.md`. `GET /api/plant` feeds the drawing. **POST routes are open on the LAN** until the
+  login (nz-home `TODO.md`) is built.
+- **Reef PC by the tank:** dedicated Windows PC, Edge in kiosk mode at login
+  (`msedge.exe --kiosk http://10.0.0.100:8079 --edge-kiosk-type=fullscreen --no-first-run`, Startup folder).
+
 ---
 
 ## 7. Controllers and data sources
@@ -203,10 +232,16 @@ v0.2.0, 0.3.0 in progress; see README/CHANGELOG there). Config `/etc/nz-home.env
 | Hydros inputs | LSSS InfluxDB `ext_probe` (`hydros:<input>` in baselines) | refresh the LSSS Hydros feed if the report says "no Hydros data" |
 | Hydros outputs | LSSS `/api/hydros/live` → `hydros-pull.py` → `hydros.db` | expected overrides in `expected-overrides.txt` |
 | ATO | Hydros "1R Sump ATO" input, 15 s watcher | probe sits 5-6" from the ATO inlet |
-| GHL ProfiLux | local GHL API, TCP 10002, `ghl-pull.py` | `FLOWSENSOR[n] ACTFLOW` (L/h), `SENSOR[n] ACTVALUE`; firmware echoes the last value for invalid attributes, so reads are marker-checked. NACK -4 unknown resource, -5 unknown attribute, -101 index out of range |
+| GHL ProfiLux 4 | GHL API v1.1 over TCP 10002 at 10.0.0.215 (PLM-WiFiLAN, wired, fw 7.52, full access), `ghl-pull.py` | `FLOWSENSOR[n] ACTFLOW` (L/h), `SENSOR[n] ACTVALUE` for slots 0-15. One TCP connection per read: the port refuses a new connection for ~3 s after the last one closed. NACK -4 unknown resource, -5 unknown attribute, -101 missing/out of range, -102 not supported, -104 end of history, -105 no access |
 
-GHL flow labels (`ghl-labels.txt`, Joe's best guess): flow 0 = 320 return, 2/3 = 200 return A/B,
-1 reads 0. GHL sensor slots: 0 tank temp, 6 room temp, 7 room humidity, 8 200 temp; 1, 9 pH inputs (unused); 2-5 empty.
+GHL flow (`ghl-labels.txt`): stored names are the LOGICAL line, `ghl-pull.py` `PORT_MAP` maps them to the
+physical port so history stays continuous when plugs move. Since the 10-10 card swap: `ghl_flow0` 320 return =
+port 2, `ghl_flow2`/`ghl_flow3` 200 return A/B = ports 0/1, `ghl_flow1` unused = port 3 (Joe confirmed). 7-day
+medians ~880 / ~450 / ~400 L/h. GHL sensor slots: 0 tank temp, 8 200 temp, 10 room temp, 11 room humidity
+(humidity card in the Expansion Box since 10-11); 1 old pH input (ignored); 2 ORP-like input (varies, unused);
+3-5 empty. Also present on this firmware (read-only so far): `DOSER[0-15]` (FILLLEVEL, CAPACITY; no GHL dosers
+connected), `LEVELSENSOR`, `ILLUMINATION`, `TIMER`, `KHDIRECTOR`, `SPECIALFUNCTION`, `SYSTEM`; `DESCRIPTION` is
+blank everywhere. The GHL clock runs 1 h slow (DST not enabled).
 
 ---
 
@@ -231,8 +266,10 @@ Sent once when it starts, reminded every 12 h, short "cleared" line when it ends
 **Morning report:** the 06:25 cron now runs `/opt/reefcore/morning-report.sh`, which waits up to 15 min for the
 Hydros feed to be fresh before building the report.
 
-**GHL sensor slots (Joe 2026-10-10):** slot 0 = tank temp (`temp_ghl`), 6 = room temp (`room_temp_ghl`),
-7 = room humidity (`humidity`, %), 8 = 200 peninsula temp (`temp_200`); 1 and 9 are pH inputs with no probe or an old one (ignored); no salinity probe on the GHL. Mapped in `reef-baselines.md` (`ghl:ghl_sN`);
+**GHL sensor slots (Joe 2026-10-10, updated 10-11):** slot 0 = tank temp (`temp_ghl`), 8 = 200 peninsula temp
+(`temp_200`), 10 = room temp (`room_temp_ghl`), 11 = room humidity (`humidity`, %). Slots 6/7 went away when the
+humidity card left the ProfiLux; GHL expansion cards must be configured in the ProfiLux first, then moved to the
+Expansion Box. No salinity probe on the GHL. Mapped in `reef-baselines.md` (`ghl:ghl_sN`);
 they show as gauges and in the report.
 
 ---
@@ -246,6 +283,10 @@ they show as gauges and in the report.
 | Node Zero Watchdog | (ran on pizer; retired with it) | no |
 
 Telegram allows only one `getUpdates` reader per bot, so the listener is the only reader.
+
+Listener behaviour (`tg.py`, 10-10): "status" / "connection status" (no "?" needed) gets an instant reply from
+`reefchem.db` and `alerts-state.json`; questions are recognised by wording, not only by "?"; any other text is
+noted in today's log and acknowledged ("📝 Noted in today's log…"), so nothing goes unanswered.
 
 ---
 
@@ -288,13 +329,17 @@ See the repo README ("GitHub and publishing") for both repos, deploy keys and th
 
 ---
 
-## 10. Open items (2026-10-10)
+## 10. Open items (2026-10-11)
 
 | Item | Status |
 |---|---|
 | Monthly-review cron line on mccrae | Joe to add: `0 7 1 * * root /root/reef-log/monthly-review.sh >/dev/null 2>&1` |
-| GHL flow sensors: confirm lines; readings look low for Royal Exclusives | at-home list |
-| GHL sensor slots 0-9: name them (or send the GHL API reference) | at-home list |
+| GHL flow lines confirmed; 'look low for Royal Exclusives' question still open | watching |
+| GHL clock 1 h slow: +1 h and enable DST | at-home list |
+| nz-home login (POST routes open on the LAN) | nz-home `TODO.md` |
+| Maintenance page: Imperial background choice; pass 2 per-equipment blueprints (needs MP40 / gyre / Turbelle mapping) | Joe to choose |
+| Reef PC: console mode (bigger touch targets, idle page rotation) | after the kiosk settles |
+| GHL doser ESP32 retrofit (PoE, LSSS family, scales, 4 isolated triggers) | **parked** on the roadmap until the outlet PCB is done and the move |
 | ATO pump flow (1 min into a cup) → gallons evaporated per day | at-home list |
 | Hydros overrides, ORP probe, Apex vs Hydros pH gap ~0.3, D4 Mg regimen, salt batch test | at-home list |
 | Water volume, WC volume, canary corals | tank profile TBD |
@@ -316,6 +361,9 @@ See the repo README ("GitHub and publishing") for both repos, deploy keys and th
 - Know the instrument schedule before flagging stalls (Trident Ca/Mg run once a day).
 - Change one shared script, check everything that imports it (nz-home imports reefchem).
 - Telegram: one reader per bot; a crashing reader swallows messages, so keep the listener soft-failing.
-- Controllers lie politely: the GHL echoes the last value for a bad query; verify with a marker read.
+- Controllers lie politely: the GHL (older firmware) echoed the last value for a bad query; fw 7.52 NACKs properly.
+- GHL: configure an expansion card in the ProfiLux first, then move it to the Expansion Box; the TCP API wants one
+  long-lived connection (~3 s cooldown between connections).
+- Store sensor history under logical names and map physical ports in code; plugs move.
 - Shell: `<placeholders>` break bash; curly quotes from phone apps break commands;
   `pct exec` needs `bash -lc` for tools on a login PATH; `cp -p` onto the NFS dataset fails (ownership).
