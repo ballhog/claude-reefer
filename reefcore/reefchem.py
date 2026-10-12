@@ -369,9 +369,11 @@ def data_due(db, now):
     if tds:
         hi = tds[int(len(tds) * .95) - 1 if len(tds) > 1 else 0]
         lvl = "overdue" if hi >= 5 else "due" if hi >= 1 else "info"
-        out["M14"] = {"level": lvl, "short": f"TDS {hi:.0f} ppm", "reason": f"product water TDS up to {hi:.1f} ppm in 3 days (resin is spent above 0-1)"}
+        x = {"level": lvl, "short": f"TDS {hi:.0f} ppm", "reason": f"product water TDS up to {hi:.1f} ppm in 3 days (resin is spent above 0-1; test between stages to find which)"}
     else:
-        out["M14"] = {"level": "info", "short": "TDS 0 ppm", "reason": "product water TDS reads 0 ppm (last 3 days)"}
+        x = {"level": "info", "short": "TDS 0 ppm", "reason": "product water TDS reads 0 ppm (last 3 days)"}
+    for k in ("M14", "M22", "M23"):        # cation, anion x2, mixed-bed DI x2 (one TDS meter after the last stage)
+        out[k] = dict(x)
     return out
 
 
