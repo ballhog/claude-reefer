@@ -17,6 +17,8 @@ together. Recipes: `reef_lab/data/recipes.md` (and Joe's vault note `Mixing Note
 
 Secrets are never written here, only where they live.
 
+**Also 10-12, upgrade Group 2:** sign-in approved from Telegram (no password) protects every change; logging from the screen (+ Log, mixed today, photos); 8 pm Telegram check-in; supplies forecast with a Sunday shopping list.
+
 **What changed in rev 10-12 (upgrade Group 1, plan in the project doc `nz-claude-reefer-upgrade-plan-2026-10-12.md`):** live screens (pages update when data lands; GHL flows and Hydros outputs every minute), tap any number for its history, maintenance by data (return-pump flow drop, skimmer cup sensor, roller overfill, RO/DI TDS; new report section "Due by data"), instrument watch alerts (impossible readings, frozen sensors, probe-pair drift, missed Trident alk run). New index on `readings(param, source, ts)`.
 
 **What changed in rev 10-11:** GHL ProfiLux now wired (PLM-WiFiLAN card, 10.0.0.215) with the GHL API at
@@ -93,6 +95,31 @@ The everyday "what does what" in plain words. Technical detail is in the section
 
 ### The reef PC by the tank
 - Dedicated Windows PC: Edge in kiosk mode at login (shortcut in the Startup folder). **Alt+F4** exits.
+
+### Signing in, and logging from the screen (added 10-12)
+- **Looking is open; changing needs a signed-in device** (chat, COMPLETE, + Log, MIXED, photos).
+- **Sign in:** tap **🔒 Sign in** (top right). Name the device, tick *Keep this device signed in* on the reef PC /
+  wall screen (6 months; otherwise 30 days), tap *Send to Telegram*. The Reef Log bot asks "Approve sign-in … code
+  123456?": check the code matches the screen, tap **✅ Approve**. The screen signs itself in. No password anywhere.
+- Top right then shows **● device name**; tap it to sign that device out. Telegram **`devices`** lists every
+  signed-in device with a *Sign out* button for each.
+- **+ Log** (top right, every page): hand test (alk, Ca, Mg, salinity, pH, NO3, PO4; odd numbers are refused,
+  e.g. alk 99), water change (5/10/20/30 gal or type it), RO/DI added. Lands in the database right away, shows on the
+  history charts (amber diamonds for tests) and in the next reef log.
+- **Dosing station:** tap a jug, then **hold "mixed today"** to restart its countdown (same as texting "mixed alk").
+- **Coral / livestock page:** open one, **+ Add photo** (iPad opens the camera), optional caption. Files to that
+  coral's photo history and timeline.
+- **Supplies** button on the dosing station: on hand, use per day (from the recipe and dose rate), days left,
+  order-by date. Red = order now (within shipping time + 2 weeks).
+
+### Telegram additions (10-12)
+- **Evening check-in, 8 pm:** 🐟 Fed · 🌊 Water change (then gallons) · 🧪 Mixed a jug (then which) ·
+  🔧 Maintenance (then which task) · 👍 Nothing else, then ✔ Done. Tap as many as fit; it shows what was already logged
+  today so nothing gets double-entered. Feeding is logged as an event (pink marker on the charts).
+- **Supplies:** `stock soda ash 2 bags`, `stock k+ 1500 ml`, `received epsom 5 lb` (adds to what's there),
+  `have a- 1000 ml`; units g/kg/lb/oz, ml/L/gal, bags/bottles (needs the pack size in supplies.md).
+  `supplies` = full list, `shopping list` = only what to order. **Sunday ~9 am** the shopping list arrives on its own.
+- `devices` = signed-in devices (see above).
 
 ### Handy links
 - Any page + `?chart=salinity` (or any parameter, e.g. `ghl_flow0`) opens that history directly.
@@ -282,6 +309,11 @@ v0.2.0, 0.3.0 in progress; see README/CHANGELOG there). Config `/etc/nz-home.env
 - **Claude chat** (Haiku, capped key, open on the LAN).
 - LAN and Tailscale only, never through the Cloudflare tunnel.
 
+**Added 2026-10-12 (Group 2):**
+- **Sign-in:** `POST /api/auth/start` {name, keep} -> 6-digit code + one-time nonce; queues a message with Approve/Deny buttons to `data/outbox/ui.jsonl`; tg.py writes `data/auth/answers/<id>.json`; `GET /api/auth/poll?id&nonce` sets `nz_s` (HttpOnly, SameSite=Strict, 30 d / 183 d). Sessions: `/var/lib/nz-home/sessions.json` (token hashes, 0600); public list without secrets: `data/auth/devices.json`; Telegram sign-outs: `data/auth/revoke/<sid>` (applied by the watcher). Max 5 requests per 10 min, codes live 5 min. `GET /api/auth/me`, `POST /api/auth/logout`. Every other POST: signed-in device or `Authorization: Bearer $NZ_HOME_TOKEN` (scripts). `nz.js` wraps fetch so any 401 opens the sign-in and retries.
+- **Logging:** `POST /api/log/test` (sanity ranges, `force` overrides), `/api/log/wc`, `/api/log/rodi` {gal} -> `data/inbox/hand-tests.jsonl` + immediate `reefchem.ingest_inbox`; `POST /api/recipes/mixed` {id: J#}; `POST /api/coral|animal/<ID>/photo?caption=` (JPEG body, 15 MB max) -> `photos/YYYY/MM/` + timeline line. All of it also goes to `data/inbox/screen-log.txt`, which `tg.py take` folds into the reef log with Joe's replies.
+- **Supplies:** `data/supplies.md` (on hand as of a date, per-batch amount + jug -> use/day, pack size, lead days); `reefchem.supplies()` -> `/api/recipes` `supplies`, the dosing-station Supplies table and a report section.
+
 **Added 2026-10-12 (Group 1):**
 - **Live:** `GET /api/events` (Server-Sent Events). A watcher thread fingerprints reefchem.db, hydros.db, alerts-state.json, maintenance and recipes files every 5 s and pushes what changed; pages refetch only then (60-120 s timer kept as fallback). Works through Caddy (nz.home.arpa). `?nolive` turns it off (headless screenshots stall on an open stream).
 - **History for any number:** `GET /api/series?p=&src=&days=` (points downsampled to ~400, normal band, events: water changes, maintenance log, mixed jugs, hand tests; `src=hydros_out` for Hydros outputs). Shared `/static/nz.js` (`NZ.live`, `NZ.chart`, `NZ.bind`): home gauges, maintenance panel values and pop-up readings, recipes barrel sensors. Deep link: any page `?chart=<param>[&src=&days=&label=]`.
@@ -378,6 +410,8 @@ they show as gauges and in the report.
 
 Telegram allows only one `getUpdates` reader per bot, so the listener is the only reader.
 
+Listener additions (10-12): long-poll 8 s (queued sign-in requests go out within seconds); sends both outboxes (`alerts.jsonl`, `ui.jsonl`, the latter with inline buttons); callbacks `auth:<id>:ok|no`, `dev:<sid>:out`, `ci:*` (check-in); 8 pm check-in and Sunday 09:00 shopping list are sent by the listener itself (state in `state/checkin-last`, `state/shopping-last`; no cron); commands `devices`, `supplies`, `shopping list`, `stock|received|have <item> <qty> [unit]`. Inbox kind `event` (e.g. fed) -> events + notes.
+
 Listener behaviour (`tg.py`, 10-10): "status" / "connection status" (no "?" needed) gets an instant reply from
 `reefchem.db` and `alerts-state.json`; questions are recognised by wording, not only by "?"; any other text is
 noted in today's log and acknowledged ("📝 Noted in today's log…"), so nothing goes unanswered.
@@ -433,7 +467,7 @@ See the repo README ("GitHub and publishing") for both repos, deploy keys and th
 | nz-home login (POST routes open on the LAN) | nz-home `TODO.md` |
 | Maintenance page: Imperial background choice; pass 2 per-equipment blueprints (needs MP40 / gyre / Turbelle mapping) | Joe to choose |
 | Reef PC: console mode (bigger touch targets, idle page rotation) | after the kiosk settles |
-| Upgrade Group 2: login, evening check-in, logging from the screen, supplies forecast (needs stock counts) | next |
+| Upgrade Group 2 | **built 10-12**; supplies need Joe's counts (`stock …` in Telegram) |
 | Upgrade Group 3: normal-day model, before/after per event, power cost (needs $/kWh) | planned |
 | Upgrade Group 4: replay slider, ask the schematic, weekly photo review, controller-action decision | planned |
 | GHL doser ESP32 retrofit (PoE, LSSS family, scales, 4 isolated triggers) | **parked** on the roadmap until the outlet PCB is done and the move |

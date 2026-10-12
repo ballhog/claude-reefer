@@ -218,6 +218,13 @@ def ingest_inbox(db):
                 db.execute("INSERT INTO notes VALUES (?,?)", (ts, f"RO/DI added {float(r['gal']):g} gal"))
                 n += 1
                 continue
+            if r.get("kind") == "event":          # e.g. fed (evening check-in); shows on history charts
+                ts = int(r["ts"])
+                ev = str(r["event"])[:20]
+                db.execute("INSERT INTO events VALUES (?,?,?)", (ts, ev, ts))
+                db.execute("INSERT INTO notes VALUES (?,?)", (ts, str(r.get("note") or ev)[:200]))
+                n += 1
+                continue
             if r.get("kind") == "wc":
                 ts = int(r["ts"])
                 db.execute("INSERT INTO events VALUES (?,?,?)", (ts, "wc", ts + 120 * 60))
@@ -383,6 +390,82 @@ def data_due_report(db, now):
         print("  nothing flagged by sensors")
     if "M04" in dd and dd["M04"]["level"] == "info":
         print(f"  return pumps: {dd['M04']['reason']}")
+
+
+def _num(x):
+    try:
+        return float(str(x).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def supplies(now=None):
+    """Supplies on hand -> days left and order-by date (Group 2, 2026-10-12). data/supplies.md; daily use from
+    the recipe (per_batch over a full jug at that jug's ml/day) or a typed use_per_day. Script arithmetic only."""
+    from datetime import date as _date, timedelta as _td
+    today = datetime.fromtimestamp(now or time.time()).date()
+    jugs = {}
+    try:
+        for l in (DATA / "recipes.md").read_text().splitlines():
+            c = [x.strip() for x in l.strip().strip("|").split("|")]
+            if len(c) >= 6 and c[0][:1] == "J" and c[0][1:].isdigit():
+                jugs[c[0]] = (_num(c[3]), _num(c[4]))
+    except OSError:
+        pass
+    out = []
+    try:
+        lines = (DATA / "supplies.md").read_text().splitlines()
+    except OSError:
+        return out
+    for l in lines:
+        c = [x.strip() for x in l.strip().strip("|").split("|")]
+        if len(c) < 11 or not (c[0][:1] == "S" and c[0][1:].isdigit()):
+            continue
+        sid, item, unit, on, upd, per, jug, typed, pack, lead = c[:10]
+        use = None
+        jl, ml = jugs.get(jug, (None, None))
+        if _num(per) and jl and ml:
+            use = _num(per) * ml / (jl * 1000)
+        elif _num(typed):
+            use = _num(typed)
+        r = {"id": sid, "item": item, "unit": unit, "use_per_day": round(use, 2) if use else None,
+             "lead_days": int(_num(lead) or 7), "pack": _num(pack), "aliases": c[10], "on_hand": None,
+             "days_left": None, "order_by": None, "state": "unknown"}
+        onv = _num(on)
+        if onv is not None:
+            try:
+                since = (today - _date.fromisoformat(upd[:10])).days
+            except ValueError:
+                since = 0
+            r["on_hand"] = round(max(0.0, onv - (use or 0) * since), 1)
+            if use:
+                r["days_left"] = round(r["on_hand"] / use, 1)
+                r["order_by"] = (today + _td(days=max(0, int(r["days_left"]) - r["lead_days"] - 14))).isoformat()
+                r["state"] = ("order" if r["days_left"] <= r["lead_days"] + 14 else
+                              "soon" if r["days_left"] <= r["lead_days"] + 30 else "ok")
+            else:
+                r["state"] = "no-use"
+        out.append(r)
+    return out
+
+
+def supplies_report(now):
+    try:
+        sp = supplies(now)
+    except Exception as e:
+        print(f"\nSupplies: unavailable ({e})")
+        return
+    if not sp:
+        return
+    print("\nSupplies (data/supplies.md; days left at the current dose rates):")
+    for r in sp:
+        if r["days_left"] is not None:
+            flag = {"order": "ORDER NOW", "soon": "order soon"}.get(r["state"], "")
+            print(f"  {r['item']}: {r['on_hand']:g} {r['unit']} = {r['days_left']:.0f} days"
+                  + (f" -> {flag} (order by {r['order_by']})" if flag else ""))
+    unknown = [r["item"] for r in sp if r["on_hand"] is None]
+    if unknown:
+        print(f"  count needed: {', '.join(unknown)}")
 
 
 def jugs(now):
@@ -673,6 +756,7 @@ def report(db, asof=None):
     maintenance(now)
     data_due_report(db, now)
     jugs(now)
+    supplies_report(now)
     ph_bump(db, now)
     ghl_flow(db, now)
     salinity_drift(db, now)

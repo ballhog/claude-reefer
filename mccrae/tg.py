@@ -659,6 +659,8 @@ def _handle(token, chat, updates, lines):
             if str(cb["from"]["id"]) != str(chat):
                 continue
             data = cb.get("data", "")
+            if handle_ui_callback(token, cb, data) or handle_checkin(token, cb, data, lines):
+                continue
             soft(token, "answerCallbackQuery", {"callback_query_id": cb["id"], "text": "Noted, filed tomorrow"})
             m = re.match(r"fb:(\d{4}-\d{2}-\d{2}):(up|down)$", data)
             if not m:
@@ -812,6 +814,14 @@ def _handle(token, chat, updates, lines):
             lines.append(f"[{ts}] hand test logged: {done}")
             soft(token, "sendMessage", {"chat_id": chat, "text": f"✅ Hand test logged: {done}. "
                                        "It shows up in the report within 15 minutes."})
+        elif text.lower().strip(" ?!.") in ("devices", "signed in", "sign-ins", "logins"):
+            devices_reply(token, chat)
+        elif text.lower().strip(" ?!.") in ("supplies", "stock", "shopping list", "shopping", "inventory"):
+            soft(token, "sendMessage", {"chat_id": chat, "text": supplies_text(only_order=text.lower().startswith("shop"))})
+        elif SUP_RE.match(text) and supply_match(SUP_RE.match(text).group(2)):
+            reply = supply_update(SUP_RE.match(text))
+            lines.append(f"[{ts}] {text}  [supplies]")
+            soft(token, "sendMessage", {"chat_id": chat, "text": reply})
         elif STATUS_RE.match(text):
             lines.append(f"[{ts}] {text}  [status asked]")
             soft(token, "sendMessage", {"chat_id": chat, "text": quick_status()})
@@ -866,26 +876,331 @@ def _handle(token, chat, updates, lines):
 
 
 OUTBOX = "/mnt/reef-lab/data/outbox/alerts.jsonl"     # reefcore reef-alerts.py queues alerts here; we send them
+OUTBOXES = [OUTBOX, "/mnt/reef-lab/data/outbox/ui.jsonl"]   # ui: nz-home sign-in requests etc. (may carry buttons)
+AUTHDIR = "/mnt/reef-lab/data/auth"                     # sign-in answers / sign-outs for nz-home (reefcore)
 
 
 def flush_outbox(token, chat):
-    """Send alerts queued by reefcore (it has no Telegram token). Rename first so nothing is sent twice."""
-    if not os.path.exists(OUTBOX) or os.path.getsize(OUTBOX) == 0:
-        return
-    work = OUTBOX + f".sending-{int(time.time())}"
-    try:
-        os.rename(OUTBOX, work)
-    except OSError:
-        return
-    for line in open(work):
-        try:
-            text = json.loads(line).get("text", "")
-        except ValueError:
+    """Send messages queued by reefcore (it has no Telegram token). Rename first so nothing is sent twice."""
+    for box in OUTBOXES:
+        if not os.path.exists(box) or os.path.getsize(box) == 0:
             continue
-        if text:
-            soft(token, "sendMessage", {"chat_id": chat, "text": text})
-    os.makedirs(os.path.dirname(OUTBOX) + "/sent", exist_ok=True)
-    os.rename(work, os.path.dirname(OUTBOX) + "/sent/" + os.path.basename(work))
+        work = box + f".sending-{int(time.time())}"
+        try:
+            os.rename(box, work)
+        except OSError:
+            continue
+        for line in open(work):
+            try:
+                j = json.loads(line)
+            except ValueError:
+                continue
+            text = j.get("text", "")
+            if not text:
+                continue
+            params = {"chat_id": chat, "text": text}
+            if j.get("buttons"):
+                params["reply_markup"] = json.dumps({"inline_keyboard": [
+                    [{"text": b["text"], "callback_data": b["data"]} for b in row] for row in j["buttons"]]})
+            soft(token, "sendMessage", params)
+        os.makedirs(os.path.dirname(box) + "/sent", exist_ok=True)
+        os.rename(work, os.path.dirname(box) + "/sent/" + os.path.basename(work))
+
+
+def devices_reply(token, chat):
+    try:
+        devs = json.load(open(f"{AUTHDIR}/devices.json"))
+    except (OSError, ValueError):
+        devs = []
+    now = time.time()
+    devs = [d for d in devs if d.get("exp", 0) > now]
+    if not devs:
+        soft(token, "sendMessage", {"chat_id": chat, "text": "🔐 No devices signed in to the reef pages."})
+        return
+    lines = [f"• {d['name']}: last used {time.strftime('%m-%d %H:%M', time.localtime(d['last']))}, "
+             f"until {time.strftime('%Y-%m-%d', time.localtime(d['exp']))}" for d in devs]
+    soft(token, "sendMessage", {"chat_id": chat, "text": "🔐 Signed-in devices:\n" + "\n".join(lines),
+         "reply_markup": json.dumps({"inline_keyboard": [[{"text": f"Sign out {d['name']}", "callback_data": f"dev:{d['sid']}:out"}]
+                                                          for d in devs][:8]})})
+
+
+
+
+# ---------- supplies (Group 2, 2026-10-12): stock counts, days left, weekly shopping list ----------
+SUPPLIES = "/mnt/reef-lab/data/supplies.md"
+SUP_RE = re.compile(r"^\s*(stock|have|on hand|received|got|bought)\s+(.+?)\s+([\d.,]+)\s*"
+                    r"(kg|g|grams?|lbs?|pounds?|oz|ml|l|liters?|litres?|gal|gallons?|bags?|bottles?|packs?|rolls?|tubs?|boxes?)?\s*$", re.I)
+TO_UNIT = {"g": {"g": 1, "gram": 1, "grams": 1, "kg": 1000, "lb": 453.6, "lbs": 453.6, "pound": 453.6, "pounds": 453.6, "oz": 28.35},
+           "ml": {"ml": 1, "l": 1000, "liter": 1000, "liters": 1000, "litre": 1000, "litres": 1000, "gal": 3785, "gallon": 3785, "gallons": 3785},
+           "L": {"l": 1, "liter": 1, "liters": 1, "gal": 3.785, "gallon": 3.785, "gallons": 3.785, "ml": .001},
+           "roll": {"roll": 1, "rolls": 1}}
+
+
+def _f(x):
+    try:
+        return float(str(x).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def supply_table():
+    """-> (lines, [(line_index, cells)])"""
+    lines = open(SUPPLIES).read().split("\n")
+    rows = []
+    for i, l in enumerate(lines):
+        c = [x.strip() for x in l.strip().strip("|").split("|")]
+        if len(c) >= 11 and c[0][:1] == "S" and c[0][1:].isdigit():
+            rows.append((i, c))
+    return lines, rows
+
+
+def supply_now(c):
+    """(on_hand_now, use_per_day, days_left) with the same arithmetic as reefchem.supplies()."""
+    import datetime as dt
+    jugs = {r[0]: (_f(r[3]), _f(r[4])) for r in jug_rows()}
+    jl, ml = jugs.get(c[6], (None, None))
+    use = _f(c[5]) * ml / (jl * 1000) if _f(c[5]) and jl and ml else _f(c[7])
+    on = _f(c[3])
+    if on is None:
+        return None, use, None
+    try:
+        since = (dt.date.today() - dt.date.fromisoformat(c[4][:10])).days
+    except ValueError:
+        since = 0
+    on = max(0.0, on - (use or 0) * since)
+    return on, use, (on / use if use else None)
+
+
+def supply_match(text):
+    low, best = text.lower(), None
+    for i, c in supply_table()[1]:
+        for a in [x.strip().lower() for x in c[10].split(",") if x.strip()] + [c[1].lower()]:
+            if a and (low == a or re.search(r"\b" + re.escape(a) + r"\b", low)) and (not best or len(a) > best[2]):
+                best = (i, c, len(a))
+    return best
+
+
+def fmt_amount(v, unit):
+    if v is None:
+        return "?"
+    if unit == "g" and v >= 1000:
+        return f"{v / 1000:.1f} kg"
+    if unit == "ml" and v >= 1000:
+        return f"{v / 1000:.2f} L"
+    return f"{v:g} {unit}"
+
+
+def supply_update(m):
+    verb, what, qty, u = m.group(1).lower(), m.group(2), _f(m.group(3)), (m.group(4) or "").lower()
+    hit = supply_match(what)
+    if not hit:
+        return f"🤔 I don't know '{what}' in the supplies list. Names I know: " + ", ".join(c[1] for _, c in supply_table()[1])
+    i, c, _ = hit
+    unit = c[2]
+    if u in ("bag", "bags", "bottle", "bottles", "pack", "packs", "tub", "tubs", "box", "boxes") or (not u and unit not in ("g", "ml")):
+        pack = _f(c[8]) if unit not in ("roll",) else 1
+        if not pack:
+            return f"📦 How big is one {u or 'pack'} of {c[1]}? Send it in {unit} (e.g. 'stock {what} 1500 {unit}'), or add pack size in supplies.md."
+        amount = qty * pack
+    elif not u:
+        amount = qty
+    else:
+        k = TO_UNIT.get(unit, {}).get(u.rstrip(".")) or TO_UNIT.get(unit, {}).get(u.rstrip("s"))
+        if k is None:
+            return f"⚠️ {c[1]} is counted in {unit}; I can't convert {u}."
+        amount = qty * k
+    now_on, use, _ = supply_now(c)
+    new = amount + (now_on or 0) if verb in ("received", "got", "bought") else amount
+    lines, _ = supply_table()
+    c = c[:]
+    c[3], c[4] = f"{new:g}", time.strftime("%Y-%m-%d")
+    lines[i] = "| " + " | ".join(c) + " |"
+    open(SUPPLIES, "w").write("\n".join(lines))
+    days = f", about {new / use:.0f} days at the current dose rate" if use else ""
+    return f"📦 {c[1]}: {fmt_amount(new, unit)} on hand{days}."
+
+
+def supplies_text(only_order=False):
+    out, need = [], []
+    for _, c in supply_table()[1]:
+        on, use, days = supply_now(c)
+        lead = int(_f(c[9]) or 7)
+        if on is None:
+            need.append(c[1])
+            continue
+        if days is None:
+            if not only_order:
+                out.append(f"• {c[1]}: {fmt_amount(on, c[2])}")
+            continue
+        flag = "🔴 order now" if days <= lead + 14 else "🟡 order soon" if days <= lead + 30 else ""
+        if only_order and not flag:
+            continue
+        out.append(f"• {c[1]}: {fmt_amount(on, c[2])}, ~{days:.0f} days {flag}".rstrip())
+    head = "🛒 Weekly shopping list" if only_order else "📦 Supplies"
+    body = "\n".join(out) if out else ("Nothing to order this week. 👍" if only_order else "No counts yet.")
+    tail = ("\n\nCount needed (send e.g. 'stock k+ 1500 ml'): " + ", ".join(need)) if need else ""
+    return f"{head}\n{body}{tail}"
+
+
+WEEKLY_STATE = f"{BASE}/state/shopping-last"
+
+
+def maybe_weekly():
+    lt = time.localtime()
+    if lt.tm_wday != 6 or not 9 <= lt.tm_hour < 11:      # Sunday 09:00-11:00
+        return
+    day = time.strftime("%Y-%m-%d", lt)
+    try:
+        if open(WEEKLY_STATE).read().strip() == day:
+            return
+    except OSError:
+        pass
+    open(WEEKLY_STATE, "w").write(day)
+    token, chat = env()
+    api(token, "sendMessage", {"chat_id": chat, "text": supplies_text(only_order=True)})
+
+
+# ---------- evening check-in (Group 2, 2026-10-12): one tap logs the day ----------
+CI_MAIN = [[("🐟 Fed", "ci:fed"), ("🌊 Water change", "ci:wc"), ("🧪 Mixed a jug", "ci:mix")],
+           [("🔧 Maintenance", "ci:mt"), ("👍 Nothing else", "ci:none")]]
+
+
+def _kb(rows):
+    return json.dumps({"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in row] for row in rows]})
+
+
+def logged_today():
+    """What Joe already logged today (Telegram replies, home page, maintenance log), for the check-in."""
+    day, out = time.strftime("%Y-%m-%d"), []
+    for p in (PENDING, "/mnt/reef-lab/data/inbox/screen-log.txt"):
+        try:
+            out += [l.split("] ", 1)[1].strip() for l in open(p) if l.startswith("[" + day)]
+        except (OSError, IndexError):
+            pass
+    try:
+        out += [l[19:].strip() for l in open(MAINT_LOG) if l.startswith("- " + day)]
+    except OSError:
+        pass
+    return out
+
+
+CHECKIN_AT = (20, 0)                                    # local time; the always-on listener sends it (no cron)
+CHECKIN_STATE = f"{BASE}/state/checkin-last"
+
+
+def maybe_checkin():
+    lt = time.localtime()
+    if (lt.tm_hour, lt.tm_min) < CHECKIN_AT or lt.tm_hour > CHECKIN_AT[0] + 1:
+        return
+    day = time.strftime("%Y-%m-%d", lt)
+    try:
+        if open(CHECKIN_STATE).read().strip() == day:
+            return
+    except OSError:
+        pass
+    open(CHECKIN_STATE, "w").write(day)                 # mark first: never send twice even if sending fails
+    checkin()
+
+
+def checkin():
+    token, chat = env()
+    done = logged_today()
+    text = "🌙 Evening check-in: anything to log today? Tap as many as fit, then ✔ Done."
+    if done:
+        text += "\n\nAlready logged today:\n" + "\n".join("• " + d[:90] for d in done[-8:])
+    api(token, "sendMessage", {"chat_id": chat, "text": text, "reply_markup": _kb(CI_MAIN + [[("✔ Done", "ci:done")]])})
+
+
+def _ci_event(event, note):
+    os.makedirs(os.path.dirname(INBOX), exist_ok=True)
+    with open(INBOX, "a") as f:
+        f.write(json.dumps({"ts": int(time.time()), "kind": "event", "event": event, "note": note}) + "\n")
+
+
+def handle_checkin(token, cb, data, lines):
+    if not data.startswith("ci:"):
+        return False
+    msg = cb.get("message") or {}
+    ts = time.strftime("%Y-%m-%d %H:%M")
+    part = data.split(":")
+    say, kb = None, CI_MAIN + [[("✔ Done", "ci:done")]]
+    if part[1] == "fed":
+        _ci_event("fed", "fed (evening check-in)")
+        lines.append(f"[{ts}] fed  [evening check-in]")
+        say = "🐟 fed"
+    elif part[1] == "wc" and len(part) == 2:
+        kb = [[(f"{g} gal", f"ci:wc:{g}") for g in (5, 10, 20, 30)], [("40 gal", "ci:wc:40"), ("↩ back", "ci:back")]]
+    elif part[1] == "wc":
+        gal = float(part[2])
+        os.makedirs(os.path.dirname(INBOX), exist_ok=True)
+        with open(INBOX, "a") as f:
+            f.write(json.dumps({"ts": int(time.time()), "kind": "wc", "gal": gal}) + "\n")
+        lines.append(f"[{ts}] water change {gal:g} gal  [evening check-in]")
+        say = f"🌊 water change {gal:g} gal"
+    elif part[1] == "mix" and len(part) == 2:
+        rows = jug_rows()
+        kb = [[(r[1].split(" (")[0][:28], f"ci:mix:{r[0]}")] for r in rows][:6] + [[("↩ back", "ci:back")]]
+    elif part[1] == "mix":
+        row = next((r for r in jug_rows() if r[0] == part[2]), None)
+        if row:
+            mix_done(row, ts)
+            lines.append(f"[{ts}] mixed {row[1]}  [evening check-in]")
+            say = f"🧪 mixed {row[1].split(' (')[0]}"
+    elif part[1] == "mt" and len(part) == 2:
+        rows, ranked = maint_rows(), []
+        for r in rows:
+            d, _ = maint_due(r)
+            rank = d if isinstance(d, int) else 9998 if d == "never logged" else None
+            if rank is not None:
+                ranked.append((rank, r))
+        ranked.sort(key=lambda x: x[0])
+        kb = [[(r[1][:32], f"ci:mt:{r[0]}")] for _, r in ranked[:7]] + [[("↩ back", "ci:back")]]
+    elif part[1] == "mt":
+        row = next((r for r in maint_rows() if r[0] == part[2]), None)
+        if row:
+            maint_done(row, "done (evening check-in)", ts)
+            lines.append(f"[{ts}] {row[1]}  [maintenance logged, evening check-in]")
+            say = f"🔧 {row[1]}"
+    elif part[1] == "none":
+        lines.append(f"[{ts}] nothing else today  [evening check-in]")
+        say = "👍 nothing else today"
+    elif part[1] == "done":
+        kb = None
+    soft(token, "answerCallbackQuery", {"callback_query_id": cb["id"], "text": ("Logged: " + say) if say else ""})
+    if msg:
+        text = msg.get("text", "")
+        if say:
+            text += ("\n" if "\n✓" in text else "\n\nLogged now:") + "\n✓ " + say
+        if kb is None:
+            text += "\n\n✔ Done. Goes into tomorrow's log."
+        soft(token, "editMessageText", {"chat_id": msg["chat"]["id"], "message_id": msg["message_id"], "text": text[:4000],
+                                        **({"reply_markup": _kb(kb)} if kb else {})})
+    return True
+
+
+def handle_ui_callback(token, cb, data):
+    """auth:<id>:ok|no (sign-in approval) and dev:<sid>:out (sign out). Returns True if handled."""
+    m = re.match(r"auth:([0-9a-f]{12}):(ok|no)$", data)
+    if m:
+        os.makedirs(f"{AUTHDIR}/answers", exist_ok=True)
+        with open(f"{AUTHDIR}/answers/{m.group(1)}.json", "w") as f:
+            json.dump({"ok": m.group(2) == "ok", "ts": int(time.time())}, f)
+        ok = m.group(2) == "ok"
+        soft(token, "answerCallbackQuery", {"callback_query_id": cb["id"], "text": "Approved" if ok else "Denied"})
+        label = "✅ approved" if ok else "✖ denied"
+    else:
+        m = re.match(r"dev:([0-9a-f]{8}):out$", data)
+        if not m:
+            return False
+        os.makedirs(f"{AUTHDIR}/revoke", exist_ok=True)
+        open(f"{AUTHDIR}/revoke/{m.group(1)}", "w").close()
+        soft(token, "answerCallbackQuery", {"callback_query_id": cb["id"], "text": "Signed out"})
+        label = "signed out"
+    msg = cb.get("message")
+    if msg:
+        soft(token, "editMessageReplyMarkup", {"chat_id": msg["chat"]["id"], "message_id": msg["message_id"],
+             "reply_markup": json.dumps({"inline_keyboard": [[{"text": label, "callback_data": "noop"}]]})})
+    return True
 
 
 def listen():
@@ -899,9 +1214,14 @@ def listen():
             flush_outbox(token, chat)
         except Exception:
             pass
+        try:
+            maybe_checkin()
+            maybe_weekly()
+        except Exception as e:
+            print(f"check-in / weekly list failed: {e}", file=sys.stderr)
         offset = int(open(OFFSET).read().strip()) if os.path.exists(OFFSET) else 0
         try:
-            updates = api(token, "getUpdates", {"offset": offset, "timeout": 50, "allowed_updates":
+            updates = api(token, "getUpdates", {"offset": offset, "timeout": 8, "allowed_updates":
                           json.dumps(["message", "edited_message", "callback_query"])})
         except Exception as e:
             print(f"getUpdates failed: {e}", file=sys.stderr)
@@ -933,6 +1253,12 @@ def take():
     if os.path.exists(PENDING):
         sys.stdout.write(open(PENDING).read())
         os.remove(PENDING)
+    screen = "/mnt/reef-lab/data/inbox/screen-log.txt"     # things logged on the home page (nz-home, reefcore)
+    if os.path.exists(screen):
+        work = screen + f".taking-{int(time.time())}"
+        os.rename(screen, work)
+        sys.stdout.write(open(work).read())
+        os.remove(work)
 
 
 def send(path, buttons=None):
@@ -953,6 +1279,8 @@ if __name__ == "__main__":
     cmd = a[0] if a else ""
     if cmd == "listen":
         listen()
+    elif cmd == "checkin":
+        checkin()
     elif cmd == "collect":
         collect()
     elif cmd == "take":
