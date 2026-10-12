@@ -70,7 +70,7 @@ shut down, not needed.
 - **Urgent alarms stay on the controllers** (Apex / Hydros / GHL). This system is for trends.
 - **One voice in the reef log:** the mccrae Claude. Joe's replies are the feedback.
 - **Hypotheses stay hypotheses** until Joe confirms them. Timing lining up is not proof.
-- **Read-only on controllers.** Nothing here switches outputs; the GHL API is in read-only mode.
+- **Read-only on controllers.** Nothing here switches outputs. The GHL API has full access enabled (10-10), but every script only sends GET; any SET needs Joe first.
 - **Model-written text is kept apart** from the reference library (`reef_lab`, not `reef`).
 
 ---
@@ -87,7 +87,7 @@ shut down, not needed.
 | pizer CT 117 | `10.0.0.117` | shut down, not needed (Ollama retired); disk kept |
 | LSSS Pi | `10.0.0.228:8000` | Apex + Hydros inputs (InfluxDB), Hydros live outputs |
 | Apex | `10.0.0.227` | AquaController |
-| GHL ProfiLux | `10.0.0.215` | web UI (digest auth, realm "ghl"); local API TCP 10002 (read-only) |
+| GHL ProfiLux | `10.0.0.215` | web UI (digest auth, realm "ghl"); local API TCP 10002 (full access enabled, scripts read only) |
 
 ### reef_lab layout
 
