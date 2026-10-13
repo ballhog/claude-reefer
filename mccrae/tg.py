@@ -700,6 +700,15 @@ def _handle(token, chat, updates, lines):
             continue
         ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(m["date"]))
         text = m["text"].strip()
+        if SUP_LEAD.match(text) and not text.rstrip().endswith("?"):
+            try:
+                reply = supplies_from_text(text)
+            except Exception as ex:
+                reply = f"⚠️ Supplies not saved: {ex}"
+            if reply:
+                lines.append(f"[{ts}] {text}  [supplies]")
+                soft(token, "sendMessage", {"chat_id": chat, "text": reply})
+                continue
         if text.startswith("/"):
             continue
         low = text.lower()
@@ -975,7 +984,7 @@ def supply_match(text):
     low, best = text.lower(), None
     for i, c in supply_table()[1]:
         for a in [x.strip().lower() for x in c[10].split(",") if x.strip()] + [c[1].lower()]:
-            if a and (low == a or re.search(r"\b" + re.escape(a) + r"\b", low)) and (not best or len(a) > best[2]):
+            if a and (low == a or re.search(r"\b" + re.escape(a) + r"(s|es)?\b", low)) and (not best or len(a) > best[2]):
                 best = (i, c, len(a))
     return best
 
@@ -1040,6 +1049,138 @@ def supplies_text(only_order=False):
     body = "\n".join(out) if out else ("Nothing to order this week. 👍" if only_order else "No counts yet.")
     tail = ("\n\nCount needed (send e.g. 'stock k+ 1500 ml'): " + ", ".join(need)) if need else ""
     return f"{head}\n{body}{tail}"
+
+
+
+# ---------- supplies in plain words (10-12): "Supplies 6 55 lb boxes aquaforest reef salt, 4 filter rolls" ----------
+SUP_LEAD = re.compile(r"^\s*(supplies|supply|stock|inventory|on hand|received|bought)\b[\s:,-]*(.*)$", re.I | re.S)
+_U = r"(lbs?|pounds?|kg|g|grams?|oz|ml|l|liters?|litres?|gal|gallons?)"
+_C = r"(boxes|box|bags?|bottles?|buckets?|tubs?|packs?|rolls?|pcs|pieces?|cartridges?|jugs?)"
+QTY_PATTERNS = [
+    re.compile(r"(\d+(?:\.\d+)?)\s*(?:x\s*)?(\d+(?:\.\d+)?)\s*" + _U + r"\.?\s*" + _C + r"\b", re.I),   # 6 55 lb boxes
+    re.compile(r"(\d+(?:\.\d+)?)\s*" + _C + r"\b.*?(\d+(?:\.\d+)?)\s*" + _U + r"\b", re.I),              # 6 boxes of 55 lb
+    re.compile(r"(\d+(?:\.\d+)?)\s*" + _U + r"\b", re.I),                                                  # 5 lbs / 1000ml
+    re.compile(r"(\d+(?:\.\d+)?)\s*" + _C + r"?\b", re.I),                                                 # 4 filter rolls / 4
+]
+
+
+def _conv(qty, u, unit):
+    u = (u or "").lower().rstrip(".")
+    table = TO_UNIT.get(unit, {})
+    return table.get(u) or table.get(u.rstrip("s")) if u else None
+
+
+def jug_remaining(row, ml):
+    """Set a jug's last_mixed so the forecast shows `ml` left today (e.g. 'Mg mix 1000 ml left')."""
+    import datetime as dt
+    jug_ml, per = _f(row[3]), _f(row[4])
+    if not jug_ml or not per:
+        return None
+    used_days = max(0, round((jug_ml * 1000 - ml) / per))
+    day = (dt.date.today() - dt.timedelta(days=used_days)).isoformat()
+    lines = open(RECIPES).read().split("\n")
+    for i, l in enumerate(lines):
+        c = [x.strip() for x in l.strip().strip("|").split("|")]
+        if c and c[0] == row[0]:
+            c[5] = day
+            lines[i] = "| " + " | ".join(c) + " |"
+    open(RECIPES, "w").write("\n".join(lines))
+    return round(ml / per, 1)
+
+
+def supplies_from_text(text):
+    """Parse a free-form supplies message (several items allowed). Returns the reply text, or None if it isn't one."""
+    m = SUP_LEAD.match(text)
+    if not m or not re.search(r"\d", m.group(2) or ""):
+        return None
+    adding = m.group(1).lower() in ("received", "got", "bought")
+    body = m.group(2)
+    chunks = [c.strip() for c in re.split(r",|;|\.\s|\.$|\n|\band\b|\bplus\b", body) if c and c.strip()]
+    done, unknown, ask = [], [], []
+    lines, rows = supply_table()
+    for ch in chunks:
+        if not re.search(r"\d", ch):
+            continue
+        low = ch.lower()
+        # a dosing jug's contents ("1000 ml mixed magnesium solution", "mg mix 2 L left")
+        jrow = None
+        for r in jug_rows():
+            for a in [x.strip().lower() for x in r[6].split(",") if x.strip()]:
+                if len(a) > 3 and re.search(r"\b" + re.escape(a) + r"\b", low):
+                    jrow = r
+        hit = supply_match(ch)
+        if jrow and not hit:
+            q = QTY_PATTERNS[2].search(ch)
+            k = _conv(1, q.group(2), "ml") if q else None
+            if q and k:
+                left = jug_remaining(jrow, float(q.group(1)) * k)
+                done.append(f"{jrow[1]}: {float(q.group(1)) * k:g} ml left in the jug" + (f", ~{left:g} days" if left else ""))
+            else:
+                unknown.append(ch)
+            continue
+        if not hit:
+            unknown.append(ch)
+            continue
+        i, c, _ = hit
+        unit = c[2]
+        amount, pack = None, None
+        q = QTY_PATTERNS[0].search(ch)
+        if q:
+            k = _conv(1, q.group(3), unit)
+            if k:
+                pack = float(q.group(2)) * k
+                amount = float(q.group(1)) * pack
+        if amount is None:
+            q = QTY_PATTERNS[1].search(ch)
+            if q:
+                k = _conv(1, q.group(4), unit)
+                if k:
+                    pack = float(q.group(3)) * k
+                    amount = float(q.group(1)) * pack
+        if amount is None:
+            q = QTY_PATTERNS[2].search(ch)
+            if q:
+                k = _conv(1, q.group(2), unit)
+                if k:
+                    amount = float(q.group(1)) * k
+                else:
+                    ask.append(f"{c[1]} is counted in {unit}; I can't convert {q.group(2)}")
+                    continue
+        if amount is None:
+            q = QTY_PATTERNS[3].search(ch)
+            if q:
+                n = float(q.group(1))
+                if unit in ("pcs", "roll"):
+                    amount = n
+                elif _f(c[8]):
+                    amount = n * _f(c[8])
+                else:
+                    ask.append(f"{c[1]}: {n:g} of what size? (e.g. '{n:g} x 5 lb bags' or in {unit})")
+                    continue
+        if amount is None:
+            unknown.append(ch)
+            continue
+        on_now, use, _ = supply_now(c)
+        new = amount + (on_now or 0) if adding else amount
+        c2 = c[:]
+        c2[3], c2[4] = f"{new:g}", time.strftime("%Y-%m-%d")
+        if pack and not _f(c2[8]):
+            c2[8] = f"{pack:g}"
+        lines[i] = "| " + " | ".join(c2) + " |"
+        days = f", ~{new / use:.0f} days" if use else ""
+        done.append(f"{c[1]}: {fmt_amount(new, unit)}{days}")
+    if not done and not ask:
+        if unknown:
+            return ("🤔 I couldn't match: " + "; ".join(unknown) + ".\nNames I know: " +
+                    ", ".join(c[1] for _, c in rows) + ".")
+        return None
+    open(SUPPLIES, "w").write("\n".join(lines))
+    out = "📦 Supplies " + ("added" if adding else "updated") + ":\n" + "\n".join("• " + d for d in done)
+    if ask:
+        out += "\n\nNeed one more detail:\n" + "\n".join("• " + a for a in ask)
+    if unknown:
+        out += "\n\nNot matched (say it another way, or tell me what it is): " + "; ".join(unknown)
+    return out
 
 
 WEEKLY_STATE = f"{BASE}/state/shopping-last"
