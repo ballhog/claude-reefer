@@ -16,11 +16,14 @@ nothing life-critical (heaters, return pumps) is ever under app control. Control
   - Power: $0.217/kWh (Joe 10-12). First full day 10-11: 8.2 kWh/day, $1.77/day, ~$54/month for Hydros-metered outputs only.
     Watts drift (10% shown, 20% = task due) feeds M01/M02/M05/M19 once 3+ days of history exist.
   - Still open: where heaters and display lights are plugged in (not metered); optional 7-day window for dose-change events.
-- Group 4: scope settled 2026-10-13 (controller decision made), next to build.
-- Groups 5-8: roadmap sketched 2026-10-13 (Joe, commute). Not planned in detail yet; each gets its own planning pass.
+- Group 4: scope settled 2026-10-13 (controller decision made). LSSS GHL driver DONE and deployed 10-13 (see Group 4 item 0).
+- Groups 5-9: roadmap sketched 2026-10-13. Not planned in detail yet; each gets its own planning pass.
 
 Arc: watch the tank (1-3) -> touch it carefully (4) -> understand it (5) -> integrate and guard it (6)
--> harden it (7) -> tie it to the physical world (8).
+-> harden it (7) -> tie it to the physical world (8) -> lock the doors on the LSSS (9).
+
+Division of labour (Joe 10-13): the LSSS is the gatherer and the deterministic controller; Claude Reefer is the compute.
+Only the LSSS talks to the controllers; Claude Reefer reads through the LSSS.
 
 ## Group 1: live screens, history everywhere, maintenance by data, instrument watch (DONE)
 - `/api/events` (SSE) + watcher; GHL flows and Hydros outputs every minute (`/etc/cron.d/reefcore-fast`).
@@ -58,20 +61,32 @@ it mission-critical. Heaters run on Rancos straight to the wall; return pumps ar
 never depend on a soft layer. Only "don't care if it's off" gear is a candidate (mixing pump, filter roller, skimmer).
 - Apex and Hydros: effectively read-only (cloud-mediated). Real write paths: the LSSS (Joe's own) and the GHL ProfiLux
   (API at full access, 10.0.0.215; every script still only reads).
+- Control path (Joe 10-13): Claude Reefer asks -> the LSSS decides (its own rules, veto) -> the GHL switches.
+  Claude Reefer never writes to the GHL directly. A max-on timer set in the GHL itself is the last backstop, so even an
+  LSSS crash can't leave a pump running forever.
 - Guardrails for any control: signed-in device only, press-and-hold to confirm, every switch logged,
   safety auto-off timeout.
 - The old idea of feed pause / maintenance / water-change mode via GHL SPECIALFUNCTION is not in scope.
 
 ### Build items
+0. DONE 10-13: LSSS GHL driver rewritten for the GHL local API v1.1 (text, TCP 10002, read-only). The old ws://host/ws
+   protocol stopped answering after fw 7.52 + PLM-WiFiLAN, so the LSSS showed "device offline". LSSS commits 8217df9
+   (driver, 24 tests) and 9b4a48d (docs), deployed via the System-page update. Reads probes + setpoints, 4 flows,
+   24 switch channels with load current, level sensors; values match Claude Reefer's. Sensor names/kinds come only from
+   `ghl.sensor_layout` in the Pi's runtime config (empty inputs still return numbers, e.g. 44 "mV").
+   NEXT: once it has run clean for a day or two, point Claude Reefer at the LSSS for GHL data (only one thing should
+   poll port 10002; the controller refuses new connections for ~3 s after one closes).
 1. Replay slider on the schematic (24 h / 7 d): scrub the maintenance drawing back through time.
 2. Ask the schematic: tap equipment, ask, Claude answers from that equipment's data.
 3. Weekly coral photo review (colour/growth notes per coral).
 4. First control: mixing-station mixing pump on/off. Low blast radius (a barrel, not the display).
-   OPEN: is it on an LSSS outlet or on the Hydros? Decides feasibility.
-5. GHL outlet bar: per-socket switching from the app + per-socket current into alerts. ~5-6 devices.
-   OPEN: which devices sit on the bar.
+   Joe 10-13: currently on the Hydros (read-only from here). Plan: move it to a GHL socket; switched only through
+   the LSSS. Needs Group 9 (LSSS sign-in) and LSSS socket switching with rules first.
+5. GHL outlet bar: per-socket switching (through the LSSS) + per-socket current into alerts.
+   Joe 10-13: nothing on the bar yet. The mixing pump is the first device; add others one at a time.
 6. Right-now current alerting: abnormal current, not the slow 2-week watts drift Group 3 does. Catches a straining
-   skimmer, a powerhead bound on a snail, a stalling roller motor before other signals. Sources: Hydros watts, GHL sockets.
+   skimmer, a powerhead bound on a snail, a stalling roller motor before other signals. Sources: Hydros watts, GHL sockets
+   (now readable through the LSSS).
 
 ### Future shelf (not scheduled)
 - Joe's own custom outlet box: built to be less failure-prone than off-the-shelf; the only thing that could earn
@@ -111,3 +126,21 @@ Purpose (Joe): as the groups land, go back and check we built what we meant and 
 2. Frag tracking: encapsulated glass-capsule NFC tags epoxied into frag plugs. Tap to open that colony's whole history
    (origin, placement moves, photos, growth, response to events). Lineage travels with frags sold or traded.
    Read range is touch-distance underwater: a deliberate tap, not a tank scan. Saltwater encapsulation to verify.
+
+## Group 9: LSSS sign-in (Telegram-approved), added 2026-10-13
+Why: the LSSS API has no login on any route, including reboot, shutdown, the System-page Update, setup saves and
+calibration, and it is published through the Cloudflare tunnel (reef.corallitelabs.com). No LSSS control (Group 4
+items 4-5) ships before this. In practice it comes before the Group 4 control items.
+Shape (proposed 10-13, details to settle in its planning pass):
+1. Same pattern as nz-home Group 2: looking stays open, changing needs an approved device. 6-digit code on screen,
+   Approve/Deny from the LSSS's own Telegram bot, keep-signed-in 6 months (else 30 days), `devices` to list/sign out.
+2. One check in the API covers every POST/PUT/DELETE plus the GET routes that return secrets, so new routes are
+   protected by default. Plain reads stay open (Claude Reefer, digest).
+3. Pages: any button that gets "not signed in" back opens the sign-in sheet.
+4. No Telegram lockout: the Pi's own front screen counts as signed in; an approve command over SSH (pi@10.0.0.228) as backup.
+5. Machine keys: each machine that must change things (Claude Reefer for the mixing pump) gets its own revocable,
+   scoped key. Build the slot now, issue the first key in Group 4.
+6. Product: build it as general sign-in with Telegram approval as one method, so a lab could use a PIN or other
+   method later (the LSSS is meant to ship).
+Open questions for Joe: should the tunnel stay read-only (control only on the home network) or allow control once
+signed in? Add Cloudflare Access in front of the tunnel as a second lock?
