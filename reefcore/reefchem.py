@@ -470,6 +470,205 @@ def supplies_report(now):
         print(f"  count needed: {', '.join(unknown)}")
 
 
+
+# ---------- the tank's normal day (Group 3, 2026-10-12) ----------
+# Half-hour profiles per sensor from the last 21 days (p10 / median / p90 for each time of day), "off-pattern"
+# flags when the last 2 h sit outside that band, and one row of daily numbers per day kept forever.
+PROFILE = [("temp", "apex", "Apex temp", "C"), ("ph", "apex", "pH (Apex)", ""), ("ph_hydros", "hydros", "pH (Hydros)", ""),
+           ("salinity", "hydros", "salinity", "ppt"), ("temp_hydros", "hydros", "sump temp", "C"),
+           ("temp_ghl", "ghl", "tank temp (GHL)", "C"), ("temp_200", "ghl", "200 temp", "C"),
+           ("ghl_flow0", "ghl", "320 return", "L/h"), ("ghl_flow2", "ghl", "200 return A", "L/h"),
+           ("ghl_flow3", "ghl", "200 return B", "L/h"), ("room_temp_ghl", "ghl", "room temp", "C"),
+           ("humidity", "ghl", "room humidity", "%")]
+SLOT = 1800
+PROFILES_FILE = DATA / "profiles.json"
+
+
+def _slot(t):
+    lt = time.localtime(t)
+    return (lt.tm_hour * 3600 + lt.tm_min * 60) // SLOT
+
+
+def build_profiles(db, now, days=21):
+    since, until = now - days * D, now - 6 * H          # the last 6 h never judge themselves
+    wcs = wc_events(db, since)
+    out = {}
+    for p, src, name, unit in PROFILE:
+        pts = series(db, p, src, since, until)
+        if p in WC_PARAMS:
+            pts = [x for x in pts if not any(a <= x[0] <= b for a, b, _ in wcs)]
+        by, seen = {}, {}
+        for t, v in pts:
+            k = _slot(t)
+            by.setdefault(k, []).append(v)
+            seen.setdefault(k, set()).add(time.localtime(t).tm_yday)
+        slots = {}
+        for k, vs in by.items():
+            if len(seen[k]) < 5:                          # at least 5 different days for this time of day
+                continue
+            vs.sort()
+            n = len(vs)
+            q = lambda f: vs[min(n - 1, int(f * (n - 1) + .5))]
+            slots[str(k)] = [round(q(.1), 4), round(q(.5), 4), round(q(.9), 4)]
+        if len(slots) >= 36:
+            out[p] = {"src": src, "name": name, "unit": unit, "days": days, "slots": slots}
+    return out
+
+
+def profiles(db=None, now=None, max_age=3600):
+    now = int(now or time.time())
+    j = None
+    try:
+        j = json.loads(PROFILES_FILE.read_text())
+        if now - j["built"] < max_age or db is None:
+            return j["p"]
+    except (OSError, ValueError, KeyError):
+        if db is None:
+            return {}
+    p = build_profiles(db, now)
+    tmp = PROFILES_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"built": now, "p": p}))
+    tmp.replace(PROFILES_FILE)
+    return p
+
+
+def off_pattern(db, now, prof=None):
+    """Sensors whose last 2 h sit mostly outside their normal band for those times of day."""
+    prof = prof if prof is not None else profiles()
+    out = []
+    for p, pr in prof.items():
+        pts = series(db, p, pr["src"], now - 2 * H, now)
+        if len(pts) < 8 or now - pts[-1][0] > 45 * 60:
+            continue
+        hi_n = lo_n = n = 0
+        devs = []
+        for t, v in pts:
+            b = pr["slots"].get(str(_slot(t)))
+            if not b:
+                continue
+            w = max(b[2] - b[0], abs(b[1]) * .005, 1e-6)
+            n += 1
+            if v > b[2] + .25 * w:
+                hi_n += 1
+            elif v < b[0] - .25 * w:
+                lo_n += 1
+            devs.append(v - b[1])
+        if n < 8:
+            continue
+        for cnt, d in ((hi_n, "above"), (lo_n, "below")):
+            if cnt / n >= .75:
+                devs.sort()
+                out.append({"p": p, "name": pr["name"], "unit": pr["unit"], "dir": d,
+                            "now": round(pts[-1][1], 3), "dev": round(devs[len(devs) // 2], 3)})
+    return out
+
+
+def _q(vs, f):
+    vs = sorted(vs)
+    return vs[min(len(vs) - 1, int(f * (len(vs) - 1) + .5))] if vs else None
+
+
+def daily_numbers(db, day):
+    """One day's numbers (local date 'YYYY-MM-DD') -> {metric: value}."""
+    t0 = int(datetime.fromisoformat(day).timestamp())
+    t1 = t0 + D
+    wcs = wc_events(db, t0)
+    out = {}
+    for p, src, key in (("ph", "apex", "ph_swing"), ("ph_hydros", "hydros", "ph_hydros_swing"),
+                        ("temp", "apex", "temp_swing"), ("temp_hydros", "hydros", "temp_hydros_swing")):
+        vs = [v for t, v in series(db, p, src, t0, t1) if not (p.startswith("temp") and any(a <= t <= b for a, b, _ in wcs))]
+        if len(vs) >= 48:
+            out[key] = round(_q(vs, .95) - _q(vs, .05), 3)
+    sal = series(db, "salinity", "hydros", t0, t1)
+    if len(sal) >= 48:
+        out["sal_median"] = round(_q([v for _, v in sal], .5), 3)
+        first = [v for t, v in sal if t < t0 + 3 * H]
+        last = [v for t, v in sal if t >= t1 - 3 * H]
+        if len(first) >= 6 and len(last) >= 6:
+            out["sal_drift"] = round(_q(last, .5) - _q(first, .5), 3)
+    for i, key in ((0, "flow320_med"), (2, "flowA_med"), (3, "flowB_med")):
+        vs = [v for _, v in series(db, f"ghl_flow{i}", "ghl", t0, t1)]
+        if len(vs) >= 24:
+            out[key] = round(_q(vs, .5), 1)
+    try:
+        h = sqlite3.connect(f"file:{DATA / 'hydros.db'}?mode=ro", uri=True, timeout=10)
+        n = h.execute("SELECT COUNT(*) FROM ato WHERE value=1 AND ts>=? AND ts<?", (t0, t1)).fetchone()[0]
+        if h.execute("SELECT COUNT(*) FROM ato WHERE ts>=? AND ts<?", (t0 - D, t1)).fetchone()[0]:
+            out["ato_runs"] = n
+        w = [x for (x,) in h.execute("SELECT watts FROM outputs WHERE name='Skimmer' AND state=1 AND watts IS NOT NULL "
+                                     "AND ts>=? AND ts<?", (t0, t1))]
+        if w:
+            out["skimmer_w"] = round(_q(w, .5), 1)
+        h.close()
+    except Exception:
+        pass
+    return out
+
+
+DAILY_NAMES = {"ph_swing": ("pH swing per day (Apex)", ""), "ph_hydros_swing": ("pH swing per day (Hydros)", ""),
+               "temp_swing": ("temp swing per day (Apex)", "C"), "temp_hydros_swing": ("sump temp swing per day", "C"),
+               "sal_median": ("salinity, daily median", "ppt"), "sal_drift": ("salinity drift per day", "ppt"),
+               "flow320_med": ("320 return, daily median", "L/h"), "flowA_med": ("200 return A, daily median", "L/h"),
+               "flowB_med": ("200 return B, daily median", "L/h"), "ato_runs": ("ATO runs per day", ""),
+               "skimmer_w": ("skimmer watts, daily median", "W")}
+
+
+def update_daily(db, now=None, full=False):
+    """Fill the daily table: every missing day since the data starts (first run), then yesterday and today."""
+    db.execute("CREATE TABLE IF NOT EXISTS daily (day TEXT, metric TEXT, value REAL, PRIMARY KEY(day, metric))")
+    now = int(now or time.time())
+    today = datetime.fromtimestamp(now).date()
+    have = {d for (d,) in db.execute("SELECT DISTINCT day FROM daily")}
+    first = db.execute("SELECT MIN(ts) FROM readings WHERE source='apex'").fetchone()[0]
+    days = []
+    if first:
+        d = datetime.fromtimestamp(first).date()
+        while d <= today:
+            if full or str(d) not in have or (today - d).days <= 1:
+                days.append(str(d))
+            d = d.fromordinal(d.toordinal() + 1)
+    for d in days:
+        for k, v in daily_numbers(db, d).items():
+            db.execute("INSERT OR REPLACE INTO daily VALUES (?,?,?)", (d, k, v))
+    db.commit()
+    return len(days)
+
+
+def normal_day_report(db, now):
+    try:
+        prof = profiles(db, now)
+        off = off_pattern(db, now, prof)
+    except Exception as e:
+        print(f"\nNormal day: unavailable ({e})")
+        return
+    print(f"\nNormal day (half-hour profiles from the last 21 days; {len(prof)} sensors):")
+    if off:
+        for o in off:
+            print(f"  OFF-PATTERN {o['name']}: {o['now']:g} {o['unit']}, {o['dir']} its normal range for this time of day "
+                  f"(median {o['dev']:+g} {o['unit']} vs normal)")
+    else:
+        print("  every sensor is following its normal daily curve")
+    try:
+        today = str(datetime.fromtimestamp(now).date())
+        rows = {}
+        for d, k, v in db.execute("SELECT day, metric, value FROM daily WHERE day >= ?",
+                                  (str(datetime.fromtimestamp(now - 15 * D).date()),)):
+            rows.setdefault(k, {})[d] = v
+        lines = []
+        for k in ("ph_swing", "ph_hydros_swing", "temp_swing", "ato_runs", "sal_drift", "skimmer_w"):
+            r = rows.get(k, {})
+            past = [v for d, v in r.items() if d < today]
+            yday = r.get(str(datetime.fromtimestamp(now - D).date()))
+            if yday is None or len(past) < 5:
+                continue
+            lines.append(f"  {DAILY_NAMES[k][0]}: yesterday {yday:g}, 14-day median {_q(past, .5):g}")
+        if lines:
+            print("  daily numbers (kept forever in the daily table):")
+            print("\n".join(lines))
+    except Exception:
+        pass
+
+
 def jugs(now):
     """Dosing jug run-out forecast from data/recipes.md."""
     import re as _re
@@ -757,6 +956,7 @@ def report(db, asof=None):
     equipment(now)
     maintenance(now)
     data_due_report(db, now)
+    normal_day_report(db, now)
     jugs(now)
     supplies_report(now)
     ph_bump(db, now)
@@ -794,6 +994,11 @@ def main():
     if a.cmd == "pull":
         ingest_inbox(db)
         pull(db, a.hours)
+        try:                                         # normal-day model + daily numbers (cheap, every pull)
+            update_daily(db)
+            profiles(db)
+        except Exception as e:
+            print(f"normal-day model: {e}")
     elif a.cmd == "log":
         log(db, a.pairs, a.note)
     elif a.cmd == "wc":
