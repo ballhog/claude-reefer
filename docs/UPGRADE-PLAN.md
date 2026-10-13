@@ -115,7 +115,7 @@ anything smart is watching); Claude Reefer is the intelligence layer on top. Nei
    so a wrong, stale or crashed smart layer can't make it do something stupid.
 
 ## Group 7: harden the LSSS (redefined 2026-10-13; absorbs old Group 9)
-Full design: LSSS repo `docs/GROUP-7-HARDEN-LSSS.md` (latest 836fa4d). Design only, not built.
+Full design: LSSS repo `docs/GROUP-7-HARDEN-LSSS.md` (latest 9b8547b). Design only, not built.
 Extend, don't rebuild: the LSSS already has fault_service + HealthPublisher heartbeats; Group 7 extends them,
 levels Apex/GHL up to the Hydros driver, and adds the network ladder and correlated plain-language notices.
 Joe: connection failure handling must be "next level" - no blind failing, try every tool before giving up, and a
@@ -163,6 +163,12 @@ The old Group 9 sign-in is now Group 7 pillar 6. Group 9 is a fresh group; ideas
    - Camera to start with (Joe 10-13): Amcrest IP5M-T1179EW-AI-V3, 5MP PoE turret (turret, not dome, to avoid glare
      off the glass; local RTSP/ONVIF, no cloud). Backup Reolink RLC-520A; Pi Camera Module 3 + PoE HAT for close-ups.
      Confirm IR can be switched off and RTSP is available before buying.
+   - Camera plan (Joe, later 10-13): two kinds of PoE camera. Observer cameras first: display (lights-on, water
+     movement, algae/cyano) + sump equipment monitor (ATO level, skimmer cup). Spawn instrument = far goal only (clear
+     PVC overflow pipe in IR + optical trigger/turbidity sensor arming the camera; needs a dark-field optics bench test,
+     spawn-capture storage/retention, a heartbeat on the watcher). Imaging runs on vincent (prototype), then a
+     dedicated x86 mini PC with Intel iGPU/QuickSync (production), not a Pi. The LSSS stays out of imaging; it only
+     arms the spawn watcher.
    - Setup rules: IR off; white balance + exposure locked; same times and light each day; square to the glass, room
      lights dim; never moved once set.
 2. Know what's normal for the livestock, not just the water: infer animal wellbeing (polyp extension, colour, fish
