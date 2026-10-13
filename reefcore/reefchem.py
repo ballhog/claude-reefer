@@ -374,6 +374,21 @@ def data_due(db, now):
         x = {"level": "info", "short": "TDS 0 ppm", "reason": "product water TDS reads 0 ppm (last 3 days)"}
     for k in ("M14", "M22", "M23"):        # cation, anion x2, mixed-bed DI x2 (one TDS meter after the last stage)
         out[k] = dict(x)
+    try:                                   # watts drift on steady pumps (Group 3c)
+        rank = ["info", "due", "overdue"]
+        for d in power_summary(now)["drift"]:
+            k = d["task"]
+            if not k:
+                continue
+            why = f"{d['name']} drawing {d['now_w']:g} W vs its normal {d['normal_w']:g} W ({d['pct']:+d}%, Hydros meter)"
+            cur = out.get(k)
+            if cur is None or rank.index(d["level"]) > rank.index(cur["level"]):
+                out[k] = {"level": d["level"], "short": f"{d['name']} watts {d['pct']:+d}%",
+                          "reason": why + ("; " + cur["reason"] if cur else "")}
+            else:
+                cur["reason"] += "; " + why
+    except Exception:
+        pass
     return out
 
 
@@ -1040,6 +1055,111 @@ def salinity_drift(db, now):
         print(f"  NEAR HIGH: {cur:.2f} vs target top {hi:g}")
 
 
+# ---- Power and cost (Group 3c, 2026-10-12) -------------------------------------------------
+RATE = 0.217                     # $/kWh, Joe 2026-10-12
+POWER_FILE = DATA / "power.json"
+GAP_CAP = 2 * 3600               # hydros.db stores changes + hourly heartbeat; a longer gap is missing data
+POWER_TASK = {"Skimmer": "M01", "1RTunzeSmp": "M19", "300 Gyre": "M19", "320-Tunze": "M05", "320-Gyre": "M05",
+              "320-Gyre 2": "M05", "MP40": "M05", "FilterRolrPump": "M02"}   # watts drift feeds these tasks
+
+
+def _power_rows(since):
+    c = sqlite3.connect(HYDROS_DB)
+    try:
+        rows = c.execute("SELECT ts, name, watts FROM outputs WHERE ts>=? AND watts IS NOT NULL ORDER BY name, ts",
+                         (since,)).fetchall()
+    finally:
+        c.close()
+    by = {}
+    for ts, n, w in rows:
+        by.setdefault(n, []).append((ts, w))
+    return by
+
+
+def power_summary(now=None, days=14):
+    """Time-weighted kWh per Hydros output per calendar day (each stored watts held until the next row,
+    capped at 2 h), $/day at RATE, and watts drift (24 h median while drawing vs the 14 days before).
+    Only what the Hydros meters; lights and heaters on other strips are not in it. Script arithmetic only."""
+    now = int(now or time.time())
+    start = now - days * D
+    by = _power_rows(start - GAP_CAP)
+    perday, cover, nowW = {}, {}, {}
+    for n, pts in by.items():
+        for i, (t, w) in enumerate(pts):
+            t2 = pts[i + 1][0] if i + 1 < len(pts) else now
+            t2 = min(t2, t + GAP_CAP)
+            a = max(t, start)
+            while a < t2:                         # split the interval at local midnights
+                d = datetime.fromtimestamp(a)
+                nxt = int(datetime(d.year, d.month, d.day).timestamp()) + D
+                b = min(t2, nxt)
+                day = d.strftime("%Y-%m-%d")
+                perday.setdefault(day, {})
+                perday[day][n] = perday[day].get(n, 0) + w * (b - a) / 3600 / 1000
+                cover.setdefault(day, {}).setdefault(n, 0)
+                cover[day][n] += b - a
+                a = b
+        if pts and now - pts[-1][0] <= GAP_CAP:
+            nowW[n] = pts[-1][1]
+    today = datetime.fromtimestamp(now).strftime("%Y-%m-%d")
+    full = [d for d in sorted(perday) if d != today and cover[d] and max(cover[d].values()) >= 0.9 * D][-7:]
+    outs = []
+    for n in sorted({k for d in perday.values() for k in d}):
+        vals = [perday[d].get(n, 0) for d in full]
+        kwh = sum(vals) / len(vals) if vals else None
+        outs.append({"name": n, "w_now": nowW.get(n), "kwh_day": None if kwh is None else round(kwh, 3),
+                     "cost_day": None if kwh is None else round(kwh * RATE, 3),
+                     "cost_month": None if kwh is None else round(kwh * RATE * 30.4, 2)})
+    outs.sort(key=lambda o: -(o["kwh_day"] or 0))
+    tot = sum(o["kwh_day"] or 0 for o in outs) if full else None
+    # watts drift: steady loads only (median while drawing > 2 W)
+    drift = []
+    for n, pts in by.items():
+        cur = [w for t, w in pts if t >= now - D and w > 2]
+        base = [w for t, w in pts if now - 15 * D <= t < now - D and w > 2]
+        span = (now - D) - min((t for t, _ in pts), default=now)
+        if len(cur) < 6 or len(base) < 12 or span < 3 * D:
+            continue
+        mc, mb = statistics.median(cur), statistics.median(base)
+        if mb <= 0:
+            continue
+        pct = (mc - mb) / mb * 100
+        if abs(pct) >= 10 and abs(mc - mb) >= 3:
+            drift.append({"name": n, "now_w": round(mc, 1), "normal_w": round(mb, 1), "pct": round(pct),
+                          "task": POWER_TASK.get(n), "level": "due" if abs(pct) >= 20 else "info"})
+    res = {"asof": now, "rate": RATE, "days_used": full, "total_kwh_day": None if tot is None else round(tot, 2),
+           "cost_day": None if tot is None else round(tot * RATE, 2),
+           "cost_month": None if tot is None else round(tot * RATE * 30.4, 2),
+           "w_now": round(sum(v for v in nowW.values()), 1),
+           "today_kwh": round(sum(perday.get(today, {}).values()), 2),
+           "by_day": {d: round(sum(perday[d].values()), 2) for d in sorted(perday)},
+           "outputs": outs, "drift": drift,
+           "note": "Hydros-metered outputs only; lights and heaters on other strips are not counted"}
+    tmp = POWER_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(res, indent=1))
+    tmp.replace(POWER_FILE)
+    return res
+
+
+def power_report(now):
+    try:
+        p = power_summary(now)
+    except Exception as e:
+        print(f"\nPower: unavailable ({e})")
+        return
+    print(f"\nPower (Hydros-metered outputs, ${RATE}/kWh):")
+    if p["total_kwh_day"] is None:
+        print(f"  not enough full days yet; drawing {p['w_now']:.0f} W now")
+    else:
+        print(f"  {p['total_kwh_day']:.1f} kWh/day = ${p['cost_day']:.2f}/day, ${p['cost_month']:.0f}/month "
+              f"(avg of {len(p['days_used'])} full days); drawing {p['w_now']:.0f} W now")
+        top = [o for o in p["outputs"] if o["kwh_day"]][:5]
+        print("  top: " + "; ".join(f"{o['name']} {o['kwh_day']:.2f} kWh (${o['cost_month']:.2f}/mo)" for o in top))
+    for d in p["drift"]:
+        print(f"  WATTS {d['level'].upper()}: {d['name']} {d['now_w']:g} W vs normal {d['normal_w']:g} W ({d['pct']:+d}%)")
+    print(f"  {p['note']}")
+
+
 def pull(db, hours):
     url = f"{LSSS}/api/influx/export?measurements=ext_probe&hours={hours}&format=csv"
     with urllib.request.urlopen(url, timeout=300) as r:
@@ -1159,6 +1279,7 @@ def report(db, asof=None):
     effects_report(db, now)
     jugs(now)
     supplies_report(now)
+    power_report(now)
     ph_bump(db, now)
     ghl_flow(db, now)
     salinity_drift(db, now)
@@ -1199,6 +1320,7 @@ def main():
             profiles(db)
             track_dose_changes()
             update_effects(db)
+            power_summary()
         except Exception as e:
             print(f"normal-day model: {e}")
     elif a.cmd == "log":
