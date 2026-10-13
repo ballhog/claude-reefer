@@ -17,10 +17,12 @@ nothing life-critical (heaters, return pumps) is ever under app control. Control
     Watts drift (10% shown, 20% = task due) feeds M01/M02/M05/M19 once 3+ days of history exist.
   - Still open: where heaters and display lights are plugged in (not metered); optional 7-day window for dose-change events.
 - Group 4: scope settled 2026-10-13 (controller decision made). LSSS GHL driver DONE and deployed 10-13 (see Group 4 item 0).
-- Groups 5-9: roadmap sketched 2026-10-13. Not planned in detail yet; each gets its own planning pass.
+- Groups 5-8: roadmap sketched 2026-10-13. Group 7 has a full design doc (LSSS repo docs/GROUP-7-HARDEN-LSSS.md);
+  the others get their own planning pass.
+- Group 9 (LSSS sign-in) was folded into Group 7 on 10-13; Group 9 reopened as a candidate-ideas list.
 
 Arc: watch the tank (1-3) -> touch it carefully (4) -> understand it (5) -> integrate and guard it (6)
--> harden it (7) -> tie it to the physical world (8) -> lock the doors on the LSSS (9).
+-> harden the LSSS (7) -> tie it to the physical world (8).
 
 Division of labour (Joe 10-13): the LSSS is the gatherer and the deterministic controller; Claude Reefer is the compute.
 Only the LSSS talks to the controllers; Claude Reefer reads through the LSSS.
@@ -81,7 +83,7 @@ never depend on a soft layer. Only "don't care if it's off" gear is a candidate 
 3. Weekly coral photo review (colour/growth notes per coral).
 4. First control: mixing-station mixing pump on/off. Low blast radius (a barrel, not the display).
    Joe 10-13: currently on the Hydros (read-only from here). Plan: move it to a GHL socket; switched only through
-   the LSSS. Needs Group 9 (LSSS sign-in) and LSSS socket switching with rules first.
+   the LSSS. Needs Group 7 pillar 6 (LSSS sign-in) and LSSS socket switching with rules first.
 5. GHL outlet bar: per-socket switching (through the LSSS) + per-socket current into alerts.
    Joe 10-13: nothing on the bar yet. The mixing pump is the first device; add others one at a time.
 6. Right-now current alerting: abnormal current, not the slow 2-week watts drift Group 3 does. Catches a straining
@@ -112,12 +114,29 @@ anything smart is watching); Claude Reefer is the intelligence layer on top. Nei
    The LSSS holds the final veto ("you told me to keep this on; it's been a week; is that right?"),
    so a wrong, stale or crashed smart layer can't make it do something stupid.
 
-## Group 7: review and harden
-Purpose (Joe): as the groups land, go back and check we built what we meant and put the thought in, then close out.
-1. Watch the watcher: if Claude Reefer itself goes quiet (digest stops, feeds stall), Joe is told.
-2. Multi-person access: someone else (travel, a reef buddy) can get the digest and alerts and see what normal looks like.
-3. Sensor trust and calibration: cross-check probes against each other and against hand tests; catch a probe that
-   reads wrong confidently.
+## Group 7: harden the LSSS (redefined 2026-10-13; absorbs old Group 9)
+Full design: LSSS repo `docs/GROUP-7-HARDEN-LSSS.md` (latest 836fa4d). Design only, not built.
+Extend, don't rebuild: the LSSS already has fault_service + HealthPublisher heartbeats; Group 7 extends them,
+levels Apex/GHL up to the Hydros driver, and adds the network ladder and correlated plain-language notices.
+Joe: connection failure handling must be "next level" - no blind failing, try every tool before giving up, and a
+disconnection notice a non-technical person can follow. Lessons: the GHL sat "offline" for weeks with no reason given;
+"Configured" said nothing about whether it worked; a GHL card went in and the software showed nothing at all.
+1. Patients and charts: every connection (controllers, the LSSS's own sensors/outputs, MQTT, Influx, Telegram, the
+   tunnel, its own network and the internet) has a chart: state, plain diagnosis, last success vs last attempt, what
+   was tried, next retry, incident history, what it's supposed to have.
+2. Never stop trying: back-off with jitter, forever; stale-but-connected counts as failed; respect fragile devices.
+3. Try what it has, report what it sees: every way in (GHL text API -> old protocol -> port probes; name vs IP;
+   LAN vs Tailscale), and never blank: "unknown reading on sensor 7", new/missing slots are events, trust labels.
+4. Diagnostic ladder outward from the LSSS itself: own link -> gateway/LAN -> DNS -> internet -> device present ->
+   port -> protocol -> sane data. Report the first broken rung; correlate (internet down = one notice, not three).
+5. Plain-language notice: sentences for a reef sitter, one root-cause message per incident plus a recovery message,
+   no crying wolf, queued + shown on the LSSS screen when Telegram itself is unreachable.
+6. Lock the doors (was Group 9): Telegram-approved sign-in, one check on every POST/PUT/DELETE + secret GETs, reads
+   stay open, front screen + SSH as no-lockout paths, scoped machine keys, general enough for labs.
+   Gates Group 4 control. Open: tunnel read-only or control when signed in? Cloudflare Access as a second lock?
+7. Carried over, LSSS-focused: watch the watcher (LSSS <-> Claude Reefer), sensor trust and calibration
+   cross-checks, multi-person read-only access to notices.
+Order: 6 (sign-in) -> 1-2 -> 4-5 with a failure simulator and tests -> 3 -> Connections page -> 7.
 
 ## Group 8: physical-world tracking (NFC)
 1. Chemicals and supplies: NFC tag on each jug, salt box, reagent bottle. Tap on open / refill / new box ->
@@ -127,20 +146,24 @@ Purpose (Joe): as the groups land, go back and check we built what we meant and 
    (origin, placement moves, photos, growth, response to events). Lineage travels with frags sold or traded.
    Read range is touch-distance underwater: a deliberate tap, not a tank scan. Saltwater encapsulation to verify.
 
-## Group 9: LSSS sign-in (Telegram-approved), added 2026-10-13
-Why: the LSSS API has no login on any route, including reboot, shutdown, the System-page Update, setup saves and
-calibration, and it is published through the Cloudflare tunnel (reef.corallitelabs.com). No LSSS control (Group 4
-items 4-5) ships before this. In practice it comes before the Group 4 control items.
-Shape (proposed 10-13, details to settle in its planning pass):
-1. Same pattern as nz-home Group 2: looking stays open, changing needs an approved device. 6-digit code on screen,
-   Approve/Deny from the LSSS's own Telegram bot, keep-signed-in 6 months (else 30 days), `devices` to list/sign out.
-2. One check in the API covers every POST/PUT/DELETE plus the GET routes that return secrets, so new routes are
-   protected by default. Plain reads stay open (Claude Reefer, digest).
-3. Pages: any button that gets "not signed in" back opens the sign-in sheet.
-4. No Telegram lockout: the Pi's own front screen counts as signed in; an approve command over SSH (pi@10.0.0.228) as backup.
-5. Machine keys: each machine that must change things (Claude Reefer for the mixing pump) gets its own revocable,
-   scoped key. Build the slot now, issue the first key in Group 4.
-6. Product: build it as general sign-in with Telegram approval as one method, so a lab could use a PIN or other
-   method later (the LSSS is meant to ship).
-Open questions for Joe: should the tunnel stay read-only (control only on the home network) or allow control once
-signed in? Add Cloudflare Access in front of the tunnel as a second lock?
+## Group 9: candidate ideas (reopened 2026-10-13; brainstorm, not committed scope)
+The old Group 9 sign-in is now Group 7 pillar 6. Group 9 is a fresh group; ideas so far:
+1. Watch the physical world the sensors can't see (arguably the strongest idea): a camera OUTSIDE the glass (an
+   in-water camera fouls within days) plus Claude, looking at the tank and the plumbing.
+   - Light on/off timing and photoperiod (catch the day the lights don't come on); movement and flow (a pump running
+     but not moving water shows as stillness); slow change across successive images.
+   - Algae by change over time: glass filming up faster ("scraping more often than you used to"), coralline spread,
+     glass due for a wipe. Same approach as the coral photo review, pointed at surfaces.
+   - Cyano: reddish-brown, stringy, blotchy mat on sand/rock, told apart from green film by colour + texture +
+     location; more confident the more tank history it has seen.
+   - The key point is the tie-together: join what the camera sees to nitrate/phosphate trends, flow, dosing and
+     feeding, water changes. "Cyano on the sand" becomes "cyano + nutrients climbing 10 days + flow dropped on that
+     side + feeding up": a likely cause, not just an observation. The camera sees the result; chemistry and flow
+     explain it backwards.
+   - Camera to start with (Joe 10-13): Amcrest IP5M-T1179EW-AI-V3, 5MP PoE turret (turret, not dome, to avoid glare
+     off the glass; local RTSP/ONVIF, no cloud). Backup Reolink RLC-520A; Pi Camera Module 3 + PoE HAT for close-ups.
+     Confirm IR can be switched off and RTSP is available before buying.
+   - Setup rules: IR off; white balance + exposure locked; same times and light each day; square to the glass, room
+     lights dim; never moved once set.
+2. Know what's normal for the livestock, not just the water: infer animal wellbeing (polyp extension, colour, fish
+   eating) from the coral photo log plus feeding events.
