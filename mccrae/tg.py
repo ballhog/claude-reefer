@@ -70,6 +70,9 @@ def bands():
 
 def hand_test(text):
     """'alk 7.4 ca 430' / 'alk 7.4, ca 430' -> [(param, value)] or None if it isn't purely hand tests."""
+    # tolerate lead-ins: "hand test alk 7.7", "hand test results: alk 7.7", "tested alk 7.7", "salifert alk 7.7"
+    text = re.sub(r"^\s*(?:(?:my\s+)?hand[\s-]*test(?:ed|s)?(?:\s+results?)?|test(?:ed)?(?:\s+results?)?|results?|"
+                  r"salifert|hanna|red\s*sea|api|nyos|today'?s?)\b[\s:,-]*", "", text.strip(), flags=re.I)
     toks = re.split(r"[,;\n]+|\s+(?=[a-zA-Z])", text.strip())
     out = []
     for tok in toks:
