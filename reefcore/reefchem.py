@@ -669,6 +669,205 @@ def normal_day_report(db, now):
         pass
 
 
+
+# ---------- before/after for every event (Group 3, 2026-10-12) ----------
+# Each event (maintenance, jug mixed, water change, RO/DI, fed, dose-rate change, reef-log event) is compared:
+# the 24 h before vs 1-25 h after and 1-73 h after. A move only counts if it is bigger than the normal
+# day-to-day wobble of that sensor (2 x the spread of consecutive daily medians over 30 days) and a floor.
+# Wording everywhere: timing, not proof.
+EFFECT_PARAMS = [("ph", "apex", "pH", "", .03), ("ph_hydros", "hydros", "pH (Hydros)", "", .03),
+                 ("temp", "apex", "temp", "C", .15), ("salinity", "hydros", "salinity", "ppt", .15),
+                 ("ghl_flow0", "ghl", "320 return", "L/h", 15), ("ghl_flow2", "ghl", "200 return A", "L/h", 10),
+                 ("ghl_flow3", "ghl", "200 return B", "L/h", 10), ("alk", "apex", "alk", "dKH", .25),
+                 ("calc", "apex", "Ca", "ppm", 8), ("mag", "apex", "Mg", "ppm", 20)]
+EFFECTS_FILE = DATA / "event-effects.json"
+SNAP_FILE = DATA / "recipes-snapshot.json"
+
+
+def collect_events(db, since):
+    """[{key, ts, kind, label, task}] from every place Joe's actions are recorded."""
+    import re as _re
+    ev = []
+    try:
+        for l in (DATA / "maintenance-log.md").read_text().splitlines():
+            m = _re.match(r"^- (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) (?:([MJ]\d+) )?(.*)$", l.strip())
+            if not m:
+                continue
+            t = int(datetime.strptime(m.group(1), "%Y-%m-%d %H:%M").timestamp())
+            if t >= since:
+                task = m.group(2) or ""
+                kind = "mix" if task.startswith("J") else "maint"
+                ev.append({"key": f"{kind}:{t}:{task}", "ts": t, "kind": kind, "task": task,
+                           "label": m.group(3).split(":")[0][:70]})
+    except OSError:
+        pass
+    for t, k in db.execute("SELECT ts, kind FROM events WHERE ts>=? AND kind IN ('wc','rodi','fed','dose')", (since,)):
+        ev.append({"key": f"{k}:{t}", "ts": t, "kind": k, "task": "",
+                   "label": {"wc": "water change", "rodi": "RO/DI added", "fed": "fed", "dose": "dose change"}.get(k, k)})
+    try:                                                   # events Claude Reefer noted in the daily log
+        for f in sorted((DATA.parent / "log").glob("*/*/*-daily.md")):
+            day = f.name[:10]
+            t = int(datetime.fromisoformat(day).timestamp())
+            if t < since:
+                continue
+            m = _re.search(r"^events:\s*\[(.*)\]\s*$", f.read_text()[:3000], _re.M)
+            parts, depth, cur = [], 0, ""
+            for ch in (m.group(1) if m else ""):
+                depth += ch == "(" and 1 or ch == ")" and -1 or 0
+                if ch == ";" and depth == 0:
+                    parts.append(cur); cur = ""
+                else:
+                    cur += ch
+            parts.append(cur)
+            for e in [x.strip().strip('"') for x in parts if x.strip()]:
+                if e and "override" not in e and "maintenance-log" not in e:
+                    ev.append({"key": f"log:{day}:{e[:40]}", "ts": t - 12 * 3600, "kind": "log", "task": "",
+                               "label": e[:90] + " (from the reef log; time approximate)"})
+    except OSError:
+        pass
+    try:                                                   # dose-rate changes (recipes.md ml/day, snapshot diff)
+        for l in SNAP_FILE.read_text().splitlines()[1:]:
+            pass
+    except OSError:
+        pass
+    try:
+        for j in json.loads((DATA / "dose-changes.json").read_text()):
+            if j["ts"] >= since:
+                ev.append({"key": f"dose:{j['ts']}:{j['id']}", "ts": j["ts"], "kind": "dose", "task": j["id"], "label": j["label"]})
+    except (OSError, ValueError, KeyError):
+        pass
+    return sorted(ev, key=lambda e: e["ts"])
+
+
+def track_dose_changes(now=None):
+    """Snapshot ml/day per jug; record a dose-change event when it differs from the last snapshot."""
+    now = int(now or time.time())
+    cur = {}
+    try:
+        for l in (DATA / "recipes.md").read_text().splitlines():
+            c = [x.strip() for x in l.strip().strip("|").split("|")]
+            if len(c) >= 6 and c[0][:1] == "J" and c[0][1:].isdigit():
+                cur[c[0]] = (c[1].split(" (")[0], c[4])
+    except OSError:
+        return
+    try:
+        old = json.loads(SNAP_FILE.read_text())
+    except (OSError, ValueError):
+        old = None
+    if old is not None:
+        f = DATA / "dose-changes.json"
+        try:
+            ch = json.loads(f.read_text())
+        except (OSError, ValueError):
+            ch = []
+        for k, (name, ml) in cur.items():
+            if k in old and old[k][1] != ml:
+                ch.append({"ts": now, "id": k, "label": f"{name} dose {old[k][1]} -> {ml} ml/day"})
+        f.write_text(json.dumps(ch[-500:], indent=1))
+    SNAP_FILE.write_text(json.dumps(cur))
+
+
+def _daily_wobble(db, p, src, now):
+    """Typical day-to-day change of the daily median (median absolute consecutive difference, last 30 days)."""
+    by = {}
+    for t, v in series(db, p, src, now - 31 * D, now):
+        by.setdefault(time.localtime(t).tm_yday, []).append(v)
+    meds = [_q(v, .5) for k, v in sorted(by.items()) if len(v) >= 12]
+    diffs = sorted(abs(a - b) for a, b in zip(meds, meds[1:]))
+    return diffs[len(diffs) // 2] if len(diffs) >= 5 else None
+
+
+def event_effects(db, ev, now, wob=None):
+    t = ev["ts"]
+    out = {"24": None, "72": None}
+    wob = wob or {}
+    for win in ("24", "72"):
+        end = t + (25 if win == "24" else 73) * H
+        if end > now:
+            continue
+        found = []
+        for p, src, name, unit, floor in EFFECT_PARAMS:
+            if p in ("alk", "calc", "mag"):
+                # Trident tests follow the daily dose cycle (the 12:45 alk test is always ~1 dKH higher), so compare
+                # every test in the 24 h before with every test after: whole cycles on both sides.
+                ch = changes(series(db, p, src, t - 8 * D, end))
+                before = [v for x, v in ch if t - 24 * H <= x < t]
+                after = [v for x, v in ch if t + H < x <= end]
+                if len(before) < 3 or len(after) < 3:
+                    continue
+            else:
+                pts = series(db, p, src, t - 25 * H, end)
+                before = [v for x, v in pts if t - 24 * H <= x < t]
+                after = [v for x, v in pts if t + H < x <= end]
+                if len(before) < 12 or len(after) < 12:
+                    continue
+            d = _q(after, .5) - _q(before, .5)
+            w = wob.get(p)
+            lim = max(floor, 2 * w) if w else floor * 1.5
+            if abs(d) >= lim:
+                found.append({"p": p, "name": name, "unit": unit, "delta": round(d, 3), "limit": round(lim, 3)})
+        out[win] = found
+    return out
+
+
+def update_effects(db, now=None, days=60):
+    """Compute before/after for events whose windows have completed; keep results in event-effects.json."""
+    now = int(now or time.time())
+    try:
+        store = json.loads(EFFECTS_FILE.read_text())
+    except (OSError, ValueError):
+        store = {}
+    wob = {}
+    for p, src, *_ in EFFECT_PARAMS:
+        if p not in ("alk", "calc", "mag"):
+            w = _daily_wobble(db, p, src, now)
+            if w is not None:
+                wob[p] = w
+    for ev in collect_events(db, now - days * D):
+        old = store.get(ev["key"])
+        if old and old.get("72") is not None:
+            continue
+        if ev["ts"] + 25 * H > now:
+            continue
+        r = event_effects(db, ev, now, wob)
+        store[ev["key"]] = {**ev, **r}
+    tmp = EFFECTS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(store, indent=1))
+    tmp.replace(EFFECTS_FILE)
+    return store
+
+
+def effect_text(e):
+    """One line: what moved after this event (or that nothing measurable did)."""
+    r = e.get("72") if e.get("72") is not None else e.get("24")
+    if r is None:
+        return "waiting for 24 h of data"
+    win = "72 h" if e.get("72") is not None else "24 h"
+    if not r:
+        return f"no measurable effect ({win})"
+    return f"{win}: " + ", ".join(f"{x['name']} {x['delta']:+g}{(' ' + x['unit']) if x['unit'] else ''}" for x in r)
+
+
+def effects_report(db, now):
+    try:
+        store = update_effects(db, now)
+    except Exception as e:
+        print(f"\nAfter recent events: unavailable ({e})")
+        return
+    recent = [e for e in store.values() if now - 5 * D <= e["ts"] <= now - 25 * H]
+    print("\nAfter recent events (median 24 h before vs after, beyond normal day-to-day wobble; timing, not proof):")
+    if not recent:
+        print("  no events with a finished window in the last 5 days")
+    groups = []
+    for e in sorted(recent, key=lambda x: x["ts"]):
+        if groups and e["ts"] - groups[-1][0]["ts"] <= 2 * H:
+            groups[-1].append(e)
+        else:
+            groups.append([e])
+    for g in groups:
+        print(f"  {datetime.fromtimestamp(g[0]['ts']):%m-%d %H:%M} " + " + ".join(e["label"] for e in g) + f": {effect_text(g[-1])}")
+
+
 def jugs(now):
     """Dosing jug run-out forecast from data/recipes.md."""
     import re as _re
@@ -957,6 +1156,7 @@ def report(db, asof=None):
     maintenance(now)
     data_due_report(db, now)
     normal_day_report(db, now)
+    effects_report(db, now)
     jugs(now)
     supplies_report(now)
     ph_bump(db, now)
@@ -997,6 +1197,8 @@ def main():
         try:                                         # normal-day model + daily numbers (cheap, every pull)
             update_daily(db)
             profiles(db)
+            track_dose_changes()
+            update_effects(db)
         except Exception as e:
             print(f"normal-day model: {e}")
     elif a.cmd == "log":
