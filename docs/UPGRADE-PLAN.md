@@ -24,6 +24,7 @@ control target revised 2026-10-14 (see Group 4).
 - Groups 6-8: roadmap sketched 2026-10-13. Group 7 has a full design doc (LSSS repo docs/GROUP-7-HARDEN-LSSS.md);
   the others get their own planning pass.
 - Group 9 (LSSS sign-in) was folded into Group 7 on 10-13; Group 9 reopened as a candidate-ideas list.
+- The app (10-14): home-screen PWA with push built; native Xcode app is a later task (see "The app").
 - Product direction (10-14): the outlet box / probe line as open reference hardware. See
   `Product Strategy - open reference hardware 2026-10-14`.
 
@@ -192,6 +193,28 @@ and confirmed by it the same day: the GHL API can't switch sockets, so the outle
    Not yet: the Telegram bot's free-text questions still go to the mccrae reef-log assistant, not these lookups.
 3. Coral growth story: per-colony timeline from the photo log; growth over months linked to stability periods
    ("doubled in 90 days, after alk steadied"). Builds on the weekly photo review.
+
+## The app: home-screen PWA now, native iPhone/iPad app later (Joe 10-14)
+Joe asked about his own phone app instead of Telegram. Decision: PWA first, native SwiftUI app as a later task;
+Telegram stays as the backup alert channel until the app has proven itself (a tank alert should have two paths).
+1. DONE 10-14 (nz-home 04a142d, claude-reefer 34fde05): installable app + push.
+   - `manifest.webmanifest` (Claude Reefer / "Reefer", standalone, shortcuts: Maintenance, Dosing, Corals), icons
+     (`icons/`, the header's red diamond, rendered by headless Chromium via `pwa-icons.sh`), `sw.js` (network-first
+     pages + offline shell, last `/api/status` offline, never caches live data, shows pushes, tap opens the app),
+     home-screen tags + safe-area padding on every page.
+   - Web Push: `webpush.py` (RFC 8291 aes128gcm + RFC 8292 VAPID, stdlib + python3-cryptography; key and
+     subscriptions in `/var/lib/nz-home`, local disk, chmod 600). `GET /api/push/key`; `POST /api/push/subscribe |
+     unsubscribe | test` (signed-in). Bell in the header (installed app on https only): on / test / off.
+     Reef alerts (`reef-alerts.py`, same quiet hours) and the weekly coral review are pushed as well as sent to
+     Telegram. Encryption and VAPID signature self-tested (round trip decrypt, ES256 verify).
+   - Needs HTTPS: Tailscale serve on vincent -> https://vincent.tail3daf07.ts.net (Joe: enable HTTPS certificates in
+     the Tailscale admin console, then `tailscale serve --bg --https=443 http://10.0.0.100:8079` as root on vincent).
+     Phone/iPad need the Tailscale app connected. nz.home.arpa (Caddy on CT 110, plain http) unchanged.
+   - Not yet in the app: sign-in approvals (still Telegram), 8 pm check-in and Sunday shopping list (sent by the
+     mccrae bot), photo upload already works from the coral page.
+2. Later: native SwiftUI app (Xcode). Needs an Apple developer account ($99/year, or free provisioning that expires
+   every 7 days) and TestFlight. Worth it for widgets, richer notifications, NFC tag reading (Group 8) and as the
+   branded front of the hardware line (product strategy). Builds on the same nz-home APIs.
 
 ## Group 6: LSSS <-> Claude Reefer integration and two-layer safety
 Division of labour: the LSSS is the deterministic layer (rules, scripts, life support that runs whether or not
