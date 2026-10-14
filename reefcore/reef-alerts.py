@@ -224,6 +224,15 @@ def main():
             for m in out:
                 if m:
                     f.write(json.dumps({"ts": now, "text": "Reef alert: " + m}) + "\n")
+        try:                                   # also to the home-screen app (Web Push); Telegram stays the backup
+            import importlib.util as _iu
+            _sp = _iu.spec_from_file_location("webpush", "/opt/nz-home/webpush.py")
+            _wp = _iu.module_from_spec(_sp); _sp.loader.exec_module(_wp)
+            for m in out:
+                if m:
+                    _wp.send("Reef alert", m, "/", None, urgency="high")
+        except Exception as e:
+            print(f"push failed: {e}")
     state = {"last_run": now, "active": newstate}
     tmp = STATE + ".tmp"
     json.dump(state, open(tmp, "w"), indent=1); os.replace(tmp, STATE)

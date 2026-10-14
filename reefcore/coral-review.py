@@ -248,6 +248,13 @@ def main():
     OUTBOX.parent.mkdir(parents=True, exist_ok=True)
     with open(OUTBOX, "a") as g:
         g.write(json.dumps({"ts": int(now), "text": "\n".join(msg), "buttons": []}) + "\n")
+    try:                                       # also to the home-screen app
+        import importlib.util as _iu
+        _sp = _iu.spec_from_file_location("webpush", "/opt/nz-home/webpush.py")
+        _wp = _iu.module_from_spec(_sp); _sp.loader.exec_module(_wp)
+        _wp.send("Coral photo review", " ".join(msg[:2])[:180], "/corals", "coral-review")
+    except Exception as e:
+        print(f"push failed: {e}")
     print("written: timelines, " + str(REVIEWS / f"{day}.md") + ", Telegram summary queued")
 
 
