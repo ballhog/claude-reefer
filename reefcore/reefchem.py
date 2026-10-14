@@ -1169,6 +1169,8 @@ def pull(db, hours):
     for row in rows:
         if row.get("field") != "value" or not row.get("source"):
             continue
+        if row["source"] == "ghl":      # GHL comes in via ghl-pull.py (LSSS /api/ghl/live), not Influx
+            continue
         ts = int(datetime.fromisoformat(row["time"]).timestamp())
         probe = row["probe"]
         cur = db.execute("INSERT OR IGNORE INTO readings VALUES (?,?,?,?,?)",
