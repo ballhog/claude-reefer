@@ -1,10 +1,11 @@
-# Claude Reefer upgrade plan (2026-10-12, roadmap extended 2026-10-13)
+# Claude Reefer upgrade plan (2026-10-12, roadmap extended 2026-10-13, control target revised 2026-10-14)
 
 Joe: "make Claude Reefer better than ever", built in groups, each planned before building.
 Ground rules kept: scripts do the arithmetic; no dosing advice from a model; urgent alarms stay on the controllers;
-nothing life-critical (heaters, return pumps) is ever under app control. Controller writes: decided 2026-10-13 (Group 4).
+nothing life-critical (heaters, return pumps) is ever under app control. Controller writes: decided 2026-10-13 (Group 4),
+control target revised 2026-10-14 (see Group 4).
 
-## Status (2026-10-13)
+## Status (2026-10-14)
 - Group 1: DONE and pushed (live screens, tap-for-history, maintenance by data, instrument watch).
 - Group 2: DONE and pushed (Telegram-approved sign-in, + Log, mixed today, photo upload, 8 pm check-in,
   supplies forecast + Sunday list, plain-words supplies parsing, hand-test lead-ins).
@@ -16,16 +17,32 @@ nothing life-critical (heaters, return pumps) is ever under app control. Control
   - Power: $0.217/kWh (Joe 10-12). First full day 10-11: 8.2 kWh/day, $1.77/day, ~$54/month for Hydros-metered outputs only.
     Watts drift (10% shown, 20% = task due) feeds M01/M02/M05/M19 once 3+ days of history exist.
   - Still open: where heaters and display lights are plugged in (not metered); optional 7-day window for dose-change events.
-- Group 4: scope settled 2026-10-13 (controller decision made). LSSS GHL driver DONE and deployed 10-13 (see Group 4 item 0).
+- Group 4: scope settled 2026-10-13. LSSS GHL driver DONE and deployed 10-13 (item 0).
+  **Revised 10-14:** switching is built against Joe's own LSSS outlet box, not the GHL (see "Control target").
+  GHL API confirmed unable to switch sockets (manual, 10-14). Items 0-3 DONE 10-14; items 4-6 wait for the LSSS sign-in.
 - Groups 5-8: roadmap sketched 2026-10-13. Group 7 has a full design doc (LSSS repo docs/GROUP-7-HARDEN-LSSS.md);
   the others get their own planning pass.
 - Group 9 (LSSS sign-in) was folded into Group 7 on 10-13; Group 9 reopened as a candidate-ideas list.
+- Product direction (10-14): the outlet box / probe line as open reference hardware. See
+  `Product Strategy - open reference hardware 2026-10-14`.
 
 Arc: watch the tank (1-3) -> touch it carefully (4) -> understand it (5) -> integrate and guard it (6)
 -> harden the LSSS (7) -> tie it to the physical world (8).
 
 Division of labour (Joe 10-13): the LSSS is the gatherer and the deterministic controller; Claude Reefer is the compute.
 Only the LSSS talks to the controllers; Claude Reefer reads through the LSSS.
+
+## Sequence agreed 2026-10-14
+1. DONE 10-14: Claude Reefer reads GHL data from the LSSS instead of polling port 10002 itself (Group 4 item 0).
+   Same day, without the sign-in: replay slider, ask the schematic, weekly coral photo review (Group 4 items 1-3).
+2. **SETTLED 10-14 (from the manual):** the GHL API cannot switch sockets. GHL API Reference v1.1 marks SWITCHCHANNEL
+   read-only by design ("switching is the controller's job"); the API reads values and requests actions but does not
+   switch outlets. GHL is closed as a switching target. See Group 4 "GHL write capability".
+3. Group 7 pillar 6: LSSS sign-in + scoped machine keys (the gate for any switching). Joe: doing this at home.
+4. LSSS socket switching with rules, built against the LSSS outlet box (OB-SIM01 simulator as the test target,
+   then OB-DEV5): veto, max-on timer, auto-off timeout, every switch logged.
+5. Mixing pump becomes the first real device on the outlet box. Then per-socket current alerting.
+6. The rest of Group 7 (charts, never stop trying, ladder, notices) can run alongside: it extends fault_service.
 
 ## Group 1: live screens, history everywhere, maintenance by data, instrument watch (DONE)
 - `/api/events` (SSE) + watcher; GHL flows and Hydros outputs every minute (`/etc/cron.d/reefcore-fast`).
@@ -56,19 +73,43 @@ Data available: Apex + Hydros since 2026-09-03, GHL since 10-10, Hydros outputs/
 3. Power: kWh/day per Hydros output, $/month at $0.217/kWh, top consumers, watts drift as a health
    signal (skimmer / return pumps) feeding "by data". Needs from Joe: $/kWh; where the heaters are plugged in.
 
-## Group 4: look, then touch carefully (NEXT)
+## Group 4: look, then touch carefully (IN PROGRESS)
 ### Controller-action decision (made 2026-10-13)
 Joe's rule: controllers are mostly monitors. Centralising control makes a single point of failure, and livestock makes
 it mission-critical. Heaters run on Rancos straight to the wall; return pumps are independent too. Their running must
 never depend on a soft layer. Only "don't care if it's off" gear is a candidate (mixing pump, filter roller, skimmer).
-- Apex and Hydros: effectively read-only (cloud-mediated). Real write paths: the LSSS (Joe's own) and the GHL ProfiLux
-  (API at full access, 10.0.0.215; every script still only reads).
-- Control path (Joe 10-13): Claude Reefer asks -> the LSSS decides (its own rules, veto) -> the GHL switches.
-  Claude Reefer never writes to the GHL directly. A max-on timer set in the GHL itself is the last backstop, so even an
-  LSSS crash can't leave a pump running forever.
+- Apex and Hydros: effectively read-only (cloud-mediated).
+- GHL ProfiLux (10.0.0.215): **cannot switch sockets (settled 10-14 from GHL API Reference v1.1,
+  Equipment & Manuals/GHL).** See "GHL write capability" below.
 - Guardrails for any control: signed-in device only, press-and-hold to confirm, every switch logged,
   safety auto-off timeout.
 - The old idea of feed pause / maintenance / water-change mode via GHL SPECIALFUNCTION is not in scope.
+
+### GHL write capability (settled 2026-10-14)
+Both memories were right: the API has writes, just not to sockets.
+- SET works for: sensor setpoints (DESVALUE, stored permanently), lighting (master brightness with fade, daily curve
+  points/times/count), special functions (feed pause, water change, maintenance, light scenes, thunderstorm),
+  KH/ION Director targets and actions (measure, flush, etc.), and DESCRIPTION names.
+- Read-only: SWITCHCHANNEL (ACTSTATE, ACTCURRENT), TIMER (name only, no switching times), DOSER, FLOWSENSOR,
+  LEVELSENSOR, SYSTEM. GHL's stated reason matches Joe's rule: a network outage must never leave a tank unheated.
+- Access level matters: read-only access answers any SET with `NACK (-105)`.
+- Indirect route (fallback only, not planned): a socket can be programmed in the ProfiLux to react to feed pause or
+  maintenance mode, which the API can trigger; the controller then does the switching and the timing. Coarse, and
+  special-function modes stay out of scope.
+- Optional hardware confirmation, only with Joe's OK: `SET SWITCHCHANNEL[0] ACTSTATE 1` should answer `NACK (-102)`
+  and change nothing. Shares port 10002 with the LSSS poll (one client at a time).
+- Consequence: mixing pump on a GHL socket and GHL per-socket switching are dropped. GHL stays a read source
+  (probes, flows, socket state and current) through the LSSS.
+
+### Control target (revised 2026-10-14)
+Joe: build the switching for **the LSSS outlet box we're designing**, not the GHL. Decided before the manual check,
+and confirmed by it the same day: the GHL API can't switch sockets, so the outlet box is the only switching target.
+- Control path: Claude Reefer asks -> the LSSS decides (its own rules, veto) -> **the LSSS outlet box** switches.
+  Claude Reefer never writes to a device directly.
+- Hardware backstop stays: a max-on timer in the outlet box firmware itself, so even an LSSS crash can't leave a pump
+  running forever.
+- Test target while building: OB-SIM01 (simulator), then OB-DEV5 (dev board). Nothing live is at risk during the build.
+  The LSSS already has `/api/outlet-boxes/{serial}/...` routes for these; they need the Group 7 sign-in first.
 
 ### Build items
 0. DONE 10-13: LSSS GHL driver rewritten for the GHL local API v1.1 (text, TCP 10002, read-only). The old ws://host/ws
@@ -76,23 +117,45 @@ never depend on a soft layer. Only "don't care if it's off" gear is a candidate 
    (driver, 24 tests) and 9b4a48d (docs), deployed via the System-page update. Reads probes + setpoints, 4 flows,
    24 switch channels with load current, level sensors; values match Claude Reefer's. Sensor names/kinds come only from
    `ghl.sensor_layout` in the Pi's runtime config (empty inputs still return numbers, e.g. 44 "mV").
-   NEXT: once it has run clean for a day or two, point Claude Reefer at the LSSS for GHL data (only one thing should
-   poll port 10002; the controller refuses new connections for ~3 s after one closes).
-1. Replay slider on the schematic (24 h / 7 d): scrub the maintenance drawing back through time.
-2. Ask the schematic: tap equipment, ask, Claude answers from that equipment's data.
-3. Weekly coral photo review (colour/growth notes per coral).
+   **DONE 10-14 (claude-reefer 49764e1):** Claude Reefer reads the GHL through the LSSS. `ghl-pull.py` now GETs
+   `http://10.0.0.228:8000/api/ghl/live` and stores the same `ghl_flow0-3` / `ghl_s<N>` params (LSSS channel c =
+   GHL index c-1; flows mapped physical -> logical with the existing PORT_MAP), stamped with the LSSS's last_update.
+   Refuses stale (>180 s) or not-connected data, so the "GHL feed silent" alert still works. `ghl-pull.py direct` keeps
+   the old TCP read as a manual diagnostic only. Only the LSSS polls port 10002 now.
+   Also: `reefchem.py pull` skips `source=ghl` rows from the LSSS Influx export (since 10-13 they had been landing as
+   unused duplicates under LSSS names: "Tank temp", "320 return", etc.; existing duplicate rows left in place).
+   GHL-silent alert hint now says check the LSSS GHL badge first. Smoke test 17/17.
+   No longer stored: unused GHL slots ghl_s1-s5 (old pH input / empty), since the LSSS reports only configured sensors.
+1. DONE 10-14 (nz-home e9c5778): replay slider on the schematic. `/api/plant?at=<unix>` rebuilds the snapshot as of
+   that moment (readings, Hydros outputs, ATO, flow normals over the 7 days before, task states from the maintenance
+   log, by-data signals at that time, that day's report lines; last 8 days, ~0.07 s). Bar above the drawing: 24 H / 7 D,
+   scrub, play (15 min / 1 h steps), LIVE; amber while replaying, live pushes paused, COMPLETE hidden; `?at=` link.
+   Limits: history starts where the data does (GHL 10-10, Hydros outputs 10-09); jug levels aren't replayed; tasks with
+   no log entry before the moment show "not logged".
+2. DONE 10-14 (nz-home 013dde9): ask the schematic. Each pop-up ends with "Ask about <equipment>" (3 starters + box,
+   streamed, follow-ups per equipment). `/api/chat` takes `equipment`; the server adds that equipment's tasks, log
+   lines and script-computed figures (`EQUIP` map + `equipment_context()` in server.py; `GET /api/equipment/<id>` shows
+   the text). No dose advice (tested). ~6k tokens a question against the 300k/day cap.
+3. DONE 10-14 (claude-reefer e5a54d7): weekly coral photo review, `/opt/reefcore/coral-review.py`. Each living coral
+   with a photo in the last 7 days: newest vs previous photo (>= 3 days older) via the Claude API (NZ_REVIEW_MODEL,
+   else NZ_HOME_MODEL), hedged note into the coral timeline (`review: ...`), report in `data/coral-reviews/<date>.md`,
+   Telegram summary with flags and "photos wanted" (none in 14 d). Runs Sunday 08:30 via hydros-pull starting
+   `coral-review.py due` (writing cron files is blocked from Claude's side); max 3 attempts a day. First run 10-14:
+   baselines for C-001/C-002. Only 2 of 22 corals have photos, so its value depends on photos coming in.
+   (The daily Reef Log already compares a captioned photo with the last one of the same subject; this adds the
+   per-coral record and the weekly nudge.)
 4. First control: mixing-station mixing pump on/off. Low blast radius (a barrel, not the display).
-   Joe 10-13: currently on the Hydros (read-only from here). Plan: move it to a GHL socket; switched only through
+   Currently on the Hydros (read-only from here). **Plan (10-14): moves to the LSSS outlet box**, switched only through
    the LSSS. Needs Group 7 pillar 6 (LSSS sign-in) and LSSS socket switching with rules first.
-5. GHL outlet bar: per-socket switching (through the LSSS) + per-socket current into alerts.
-   Joe 10-13: nothing on the bar yet. The mixing pump is the first device; add others one at a time.
+5. Outlet switching per socket (through the LSSS) + per-socket current into alerts. Target: the LSSS outlet box.
+   GHL outlet bar switching **dropped** (API can't switch sockets); GHL per-socket state and current stay as readings.
 6. Right-now current alerting: abnormal current, not the slow 2-week watts drift Group 3 does. Catches a straining
-   skimmer, a powerhead bound on a snail, a stalling roller motor before other signals. Sources: Hydros watts, GHL sockets
-   (now readable through the LSSS).
+   skimmer, a powerhead bound on a snail, a stalling roller motor before other signals. Sources: Hydros watts, outlet-box
+   sockets, GHL sockets (readable through the LSSS).
 
 ### Future shelf (not scheduled)
-- Joe's own custom outlet box: built to be less failure-prone than off-the-shelf; the only thing that could earn
-  heater control.
+- Heater control: only ever on Joe's own heater-grade outlet box, built to be less failure-prone than off-the-shelf.
+  (The outlet box itself is no longer shelf: it is the Group 4 control target as of 10-14.)
 - Shelly (or similar) current monitoring on circuits the Hydros doesn't see: true load/power picture, monitoring only,
   feeds item 6.
 
@@ -133,7 +196,8 @@ disconnection notice a non-technical person can follow. Lessons: the GHL sat "of
    no crying wolf, queued + shown on the LSSS screen when Telegram itself is unreachable.
 6. Lock the doors (was Group 9): Telegram-approved sign-in, one check on every POST/PUT/DELETE + secret GETs, reads
    stay open, front screen + SSH as no-lockout paths, scoped machine keys, general enough for labs.
-   Gates Group 4 control. Open: tunnel read-only or control when signed in? Cloudflare Access as a second lock?
+   Gates Group 4 control (outlet box switching). The tunnel is gone since 10-13 (Tailscale only), so the open question
+   is now: if a tunnel is ever re-added, read-only or control when signed in? Cloudflare Access as a second lock?
 7. Carried over, LSSS-focused: watch the watcher (LSSS <-> Claude Reefer), sensor trust and calibration
    cross-checks, multi-person read-only access to notices.
 Order: 6 (sign-in) -> 1-2 -> 4-5 with a failure simulator and tests -> 3 -> Connections page -> 7.

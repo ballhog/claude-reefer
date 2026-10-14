@@ -5,7 +5,7 @@ updated: 2026-10-12
 tags: [node-zero, reef-lab, claude-reefer, reef-log, mccrae, reefcore, palomino, nz-home, ghl, hydros]
 ---
 
-# Reef Lab System (rev 2026-10-12)
+# Reef Lab System (rev 2026-10-14)
 
 > Current system overview. Copies of this file also live in Joe's LifeOS vault
 > (`03-Areas/Reef/Reef Lab System/Reef Lab System rev 2026-10-12.md`) and, once copied by Joe, at the root of
@@ -42,9 +42,10 @@ shut down, not needed.
 
 ---
 
-## 0. How to use it (Joe's quick guide, rev 2026-10-12 late, Groups 1-3)
+## 0. How to use it (Joe's quick guide, rev 2026-10-14, Groups 1-3 + Group 4 items 0-3)
 
-The everyday "what does what" in plain words. Technical detail is in the sections after this one.
+The everyday "what does what" in plain words. The full technical reference is `docs/REEF-LAB-SYSTEM.md` in the
+claude-reefer repo (this guide is its section 0).
 
 ### The home page (`nz.home.arpa`)
 - **Gauges** fit the screen (wall monitor, the 24" reef PC, laptop, iPad, phone with tabs at the bottom). A red top edge = outside your range or a stale test.
@@ -78,6 +79,7 @@ The everyday "what does what" in plain words. Technical detail is in the section
 - **+ Log** (top right, every page): hand test (alk, Ca, Mg, salinity, pH, NO3, PO4; odd numbers like alk 99 are refused), water change (5/10/20/30 gal or type it), RO/DI added. Lands in the database right away, shows on the history charts (amber diamonds for tests) and in the next reef log.
 - **Dosing station:** tap a jug, then **hold "mixed today"** to restart its countdown (same as texting "mixed alk").
 - **Coral / livestock page:** open one, **+ Add photo** (the iPad opens the camera), optional caption. Files to that coral's photo history and timeline.
+- **Weekly coral photo review (Sunday ~08:30):** every coral with a new photo that week gets a short note in its timeline (colour, polyps, edges, growth vs its previous photo; it says when light or angle make the comparison unreliable). Telegram gets a summary: anything to look at, and which corals need a photo. Same photo, same light and angle each week gives the best comparisons. A photo sent to the bot with the coral id in the caption (`C-012`) counts.
 
 ### Maintenance page (`nz.home.arpa/maintenance`)
 - **The drawing** is the whole plant: 200 upstairs, 320 display, 300 sump with returns, roller, skimmer, heaters, probes, ATO, X10 dosing heads, Trident, lights, and the RO/DI train (sediment, carbon block, membrane, cation, 2× anion, 2× DI, booster pump). Saltwater is dark blue, RO/DI light blue; flow dashes move faster when the GHL sees more flow.
@@ -86,6 +88,8 @@ The everyday "what does what" in plain words. Technical detail is in the section
 - **Doing a task:** in the pop-up, **press and hold COMPLETE** (about 1 s). Did it another day? Tap *done earlier*, pick the date, then hold COMPLETE. An **Undo** toast shows for 10 s. Telegram/voice ("cleaned the skimmer cup") writes the same log.
 - **BY DATA:** some tasks also watch sensors and can come due before the calendar says so: return pumps (flow down 10% from their clean level = due, 20% = overdue), skimmer cup (cup-full sensor tripped), filter roller (chamber overfill sensor), RO/DI resin (product TDS 1 ppm or more), and pump watts drift (above). The pop-up shows the sensor reason under the task, plus "After <date>" notes from the before/after check.
 - **RO/DI:** sediment and carbon block every 60 days (Joe: they go black); resins by TDS; membrane ~2 years. Changed 10-12: both sediment filters, the carbon block and one anion stage.
+- **Replay** (bar above the drawing): pick **24 H** or **7 D**, drag the slider to see the whole drawing as it was then (flows, glows, task states, sensor "by data" reasons), or press **▶** to play it forward. Everything turns amber while you're looking back and live updates pause; **LIVE** brings you back. Links with `?at=` open a moment. History starts where the data does (GHL flows 10-10, Hydros outputs 10-09).
+- **Ask about this equipment** (bottom of every pop-up): tap a starter ("How has it been this week?", "Anything unusual?", "What maintenance is coming up?") or type a question. Claude answers from that equipment's own numbers (computed by script) and never suggests dose changes. Needs a signed-in device; follow-ups keep the thread until you reload.
 - **Dotted-underlined values** in panels and pop-ups open their history chart (Hydros outputs show watts / on-off).
 - **Ticker** along the bottom: overdue/due tasks, return flows vs normal, salinity, alk, Ca, Mg, temps, pH, humidity, Hydros outputs on, last ATO run, jug days left. Hover to pause.
 - **Data feed** (right, wide screens): real report and log lines in Aurebesh.
@@ -115,7 +119,9 @@ The everyday "what does what" in plain words. Technical detail is in the section
 - `?nolive` turns live updates off (used for screenshots). `nz.home.arpa/recipes#supplies` opens the supplies table.
 
 ### GHL ProfiLux notes
-- Wired at 10.0.0.215 (PLM-WiFiLAN card). GHL API at full access, but every script only reads; nothing writes to a controller without your OK.
+- Wired at 10.0.0.215 (PLM-WiFiLAN card). Every script only reads; nothing writes to a controller without your OK.
+- **The GHL API can't switch sockets (settled 10-14 from the GHL API Reference v1.1).** It can write setpoints, lighting, feed pause / maintenance / water change / light scenes, and KH/ION Director actions, but switch channels are read-only by design: GHL keeps switching inside the controller so a network outage can't leave a tank unheated. Switching is built for your own LSSS outlet box instead; the GHL stays a read source.
+- **The LSSS reads the GHL again (10-13):** new driver on the GHL local API (port 10002). The LSSS settings page shows a live badge (green = connected, amber = connected but no new data, red = the error). Sensor names on the LSSS come from its config (`/home/pi/.config/lsss/config.yaml`, `ghl:` block). **Since 10-14 Claude Reefer reads the GHL through the LSSS**, so only the LSSS talks to the controller. If the "GHL feed silent" alert comes, look at the LSSS GHL badge first, then the ProfiLux.
 - Expansion cards: **configure them in the ProfiLux first, then move them to the Expansion Box** (the humidity card on the 200 is sensor 10 = room temp, 11 = humidity).
 - Flow ports since the card swap: port 2 = 320 return, 0/1 = 200 returns A/B, 3 empty. History keeps the line names.
 - The GHL clock runs 1 h slow until DST is enabled on it.
@@ -129,12 +135,15 @@ The everyday "what does what" in plain words. Technical detail is in the section
 - Anything odd: Telegram `status`, or Self test on the home page.
 
 ### What's next
-- Upgrade plan: `claude/nz-claude-reefer-upgrade-plan-2026-10-12.md`. Groups 1, 2 and 3 done. Group 4 = replay slider, ask the schematic, weekly photo review, controller-action decision.
+- Upgrade plan: `Claude Reefer Upgrade Plan` (repo: `docs/UPGRADE-PLAN.md`). Groups 1, 2 and 3 done; Group 4 items 0-3 done 10-14.
+- **Order agreed 10-14:** (1) Claude Reefer reads the GHL through the LSSS (done 10-14); (2) LSSS sign-in (Group 7); (3) switching with rules on your own outlet box, tested on the simulator first; (4) mixing pump as the first real device, then current alerts. (The GHL write question is settled: it can't switch sockets.)
+- **Group 4 (next):** done 10-14: GHL through the LSSS, replay slider, ask the schematic, weekly photo review. Left: mixing-pump on/off, outlet switching, right-now current alerts (all wait for the LSSS sign-in). Done 10-13: the LSSS's GHL driver. The mixing pump is on the Hydros today and **moves to the LSSS outlet box**. Switching goes Claude Reefer → LSSS (its rules, its veto) → outlet box, and waits for the LSSS sign-in (Group 7).
+- **Roadmap:** 5 = prediction window, ask anything, coral growth story. 6 = LSSS integration with rules in both layers (LSSS holds the veto). **7 = harden the LSSS** (design: LSSS repo `docs/GROUP-7-HARDEN-LSSS.md`): extend the LSSS's existing fault service; never stop trying; a diagnostic ladder that finds the real broken link (your internet vs the controller); plain-language notices a reef sitter can follow; the LSSS sign-in. 8 = NFC tracking (chemicals/reagents, frag plugs). **9 = candidate ideas:** observer cameras on the display and sump tied to the chemistry and flow data (start: Amcrest IP5M-T1179EW-AI-V3; imaging on vincent, later an x86 mini PC), and reading how the livestock are doing.
+- **Product direction:** open reference hardware (temp probe, ATO, basic and heater-grade outlet boxes); see `Product Strategy - open reference hardware 2026-10-14`.
+- Open questions for you (Group 7): if a tunnel ever comes back, look-only or control when signed in; who else gets notices; how long before a notice; may notices suggest physical actions.
 - Power: tell Claude where the heaters and display lights are plugged in (if they can be metered, they join the panel).
 - Supplies forecast needs your remaining counts (`supplies …` in Telegram).
 - Roadmap: smart RO/DI for city water at the new place; ESP32 retrofit of the GHL dosers (after the outlet PCB and the move).
-
----
 
 ## 1. Big picture
 
