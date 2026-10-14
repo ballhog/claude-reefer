@@ -4,6 +4,7 @@
   reefchem.py log alk 8.1 ca 430 mg 1350 [--note "text"]
   reefchem.py report                     plain-text summary (all math done here)
   reefchem.py wc [--minutes 120]         log a water change (temp excluded meanwhile)
+  reefchem.py forecast [--asof T] [--json]  where alk/Ca/Mg/salinity are heading (prediction window)
 """
 import argparse, csv, io, json, sqlite3, statistics, sys, time, urllib.request
 from datetime import datetime
@@ -1055,6 +1056,171 @@ def salinity_drift(db, now):
         print(f"  NEAR HIGH: {cur:.2f} vs target top {hi:g}")
 
 
+# ---- Prediction window (Group 5, 2026-10-14) ----------------------------------------------
+# Where the slow chemistry is heading: one value per day, a straight-line fit over the last week, and a trend is only
+# called when the slope is clearly bigger than its own scatter (|slope| >= 2 standard errors) AND bigger than a
+# practical minimum. A projection, not advice: no dose numbers come out of this.
+FC_DAYS, FC_MIN_POINTS, FC_HORIZON, FC_CROSS_MAX = 7, 5, 7, 7   # crossing calls only inside the projected week
+FC_PARAMS = {   # param: (label, unit, smallest change per week worth calling, how the daily value is taken)
+    "alk":      ("alkalinity", "dKH", 0.10, "the last Trident result before the 09:45 alk dose each day"),
+    "calc":     ("calcium", "ppm", 5.0, "median of each day's Trident calcium results"),
+    "mag":      ("magnesium", "ppm", 15.0, "median of each day's Trident magnesium results"),
+    "salinity": ("salinity", "ppt", 0.10, "Hydros daily median, since the last RO/DI add"),
+}
+
+
+def _day_noon(t):
+    d = datetime.fromtimestamp(t)
+    return int(d.replace(hour=12, minute=0, second=0, microsecond=0).timestamp())
+
+
+def fc_daily(db, p, now, days=FC_DAYS + 3):
+    """[(noon ts, value)] one per day for param p, oldest first; plus the restart reason if the window was cut."""
+    since = now - days * D
+    cut, why = 0, ""
+    if p in ("alk", "calc", "mag"):
+        try:                                       # a dose change restarts the trend
+            for j in json.loads((DATA / "dose-changes.json").read_text()):
+                if j["ts"] <= now and j["ts"] > cut:
+                    cut, why = j["ts"], f"dose change {datetime.fromtimestamp(j['ts']):%m-%d} ({j['label']})"
+        except (OSError, ValueError, KeyError):
+            pass
+    out = []
+    if p == "alk":
+        pts = changes(series(db, "alk", "apex", since - 2 * D, now))
+        for back in range(days, -1, -1):
+            day = datetime.fromtimestamp(now - back * D)
+            dose = int(day.replace(hour=ALK_DOSE[0], minute=ALK_DOSE[1], second=0).timestamp())
+            if dose > now or dose < since:
+                continue
+            before = [x for x in pts if dose - 16 * H <= x[0] < dose]
+            if before:
+                out.append((_day_noon(dose), before[-1][1], before[-1][0]))
+    elif p in ("calc", "mag"):
+        byday = {}
+        for t, v in changes(series(db, p, "apex", since, now)):
+            byday.setdefault(_day_noon(t), []).append((t, v))
+        out = [(d, statistics.median(v for _, v in xs), xs[-1][0]) for d, xs in sorted(byday.items())]
+    elif p == "salinity":
+        r = db.execute("SELECT MAX(ts) FROM notes WHERE ts<=? AND note LIKE 'RO/DI added %'", (now,)).fetchone()[0]
+        r2 = db.execute("SELECT MAX(ts) FROM events WHERE ts<=? AND kind='rodi'", (now,)).fetchone()[0]
+        last = max(r or 0, r2 or 0)
+        if last > cut:
+            cut, why = last, f"RO/DI added {datetime.fromtimestamp(last):%m-%d}"
+        byday = {}
+        for t, v in series(db, "salinity", "hydros", since, now):
+            byday.setdefault(_day_noon(t), []).append(v)
+        out = [(d, statistics.median(v), d) for d, v in sorted(byday.items()) if len(v) >= 3]
+    if cut:
+        out = [x for x in out if x[2] > cut]
+    else:
+        why = ""
+    return [(d, v) for d, v, _ in out][-(FC_DAYS + 1):], why
+
+
+def _fit(xs, ys):
+    """Least-squares line: (slope, intercept, residual sd, slope se). Needs 3+ points."""
+    f = statistics.linear_regression(xs, ys)
+    xbar = statistics.fmean(xs)
+    sxx = sum((x - xbar) ** 2 for x in xs)
+    sse = sum((y - (f.intercept + f.slope * x)) ** 2 for x, y in zip(xs, ys))
+    sd = (sse / (len(xs) - 2)) ** 0.5 if len(xs) > 2 else 0.0
+    return f.slope, f.intercept, sd, (sd / sxx ** 0.5 if sxx else float("inf"))
+
+
+FC_RECENT = 3          # the last 3 daily values must still follow a week's trend for it to be projected
+
+
+def forecast(db, now=None):
+    """Per parameter: daily points over the last week, whether there is a real trend, a 7-day projection and the days
+    until it leaves Joe's range. Rules (script arithmetic, explainable):
+      1. Trend = straight line through the week's daily values, called only if |slope| >= 2 standard errors and
+         the weekly change is at least FC_PARAMS' practical minimum. Otherwise: steady, level = mean of the last 3 days.
+      2. A trend is projected only if the last 3 days still follow it (their own slope has the same sign and at least
+         a third of the size). If not: 'levelled off' at the mean of the last 3 days; the old slope is not carried on.
+    """
+    now = int(now or time.time())
+    bl = baselines()
+    res = []
+    for p, (label, unit, min_wk, basis) in FC_PARAMS.items():
+        b = bl.get(p) or {}
+        lo, hi = b.get("low"), b.get("high")
+        pts, why = fc_daily(db, p, now)
+        r = {"p": p, "label": label, "unit": unit, "basis": basis, "low": lo, "high": hi,
+             "points": [[t, round(v, 4)] for t, v in pts], "restart": why, "status": "short",
+             "slope": None, "se": None, "now": None, "proj": [], "cross": None}
+        span = (pts[-1][0] - pts[0][0]) / D if len(pts) >= 2 else 0
+        if len(pts) < FC_MIN_POINTS or span < 4:
+            need = max(FC_MIN_POINTS - len(pts), 0)
+            r["text"] = (f"{label}: not enough daily values yet ({len(pts)}"
+                         + (f" since the {why}" if why else "") + f"; needs {FC_MIN_POINTS} over 4+ days"
+                         + (f", about {need} more day{'s' if need != 1 else ''}" if need else "") + ")")
+            res.append(r)
+            continue
+        xs, ys = [t / D for t, _ in pts], [v for _, v in pts]
+        d = 2 if unit in ("dKH", "ppt") else 0
+        fmt = lambda v: f"{v:.{d}f}"
+        slope, icpt, sd, se = _fit(xs, ys)
+        real = abs(slope) >= 2 * se and abs(slope) * 7 >= min_wk
+        rx, ry = xs[-FC_RECENT:], ys[-FC_RECENT:]
+        rslope = statistics.linear_regression(rx, ry).slope if len(set(rx)) > 1 else 0.0
+        recent = statistics.fmean(ry)
+        follows = real and rslope * slope > 0 and abs(rslope) >= abs(slope) / 3
+        if follows:
+            status, cur = ("rising" if slope > 0 else "falling"), icpt + slope * (now / D)
+        elif real:
+            status, cur = "levelled", recent
+        else:
+            status, cur = "steady", recent
+        r.update({"slope": slope if follows else 0.0, "week_slope": slope, "recent_slope": rslope, "se": se,
+                  "scatter": sd, "now": cur, "latest": ys[-1], "status": status})
+        for i in range(1, FC_HORIZON + 1):
+            v = cur + (slope * i if follows else 0)
+            band = 2 * (sd * sd + ((se * i) ** 2 if follows else 0)) ** 0.5
+            r["proj"].append([int(now + i * D), round(v, 4), round(v - band, 4), round(v + band, 4)])
+        if lo is not None and hi is not None:
+            if cur < lo or cur > hi:
+                r["cross"] = {"bound": lo if cur < lo else hi, "days": 0, "side": "below" if cur < lo else "above"}
+            elif follows:
+                bound = lo if slope < 0 else hi
+                days = (bound - cur) / slope
+                if 0 < days <= FC_CROSS_MAX:
+                    r["cross"] = {"bound": bound, "days": round(days, 1), "side": "below" if slope < 0 else "above",
+                                  "date": datetime.fromtimestamp(now + days * D).strftime("%a %m-%d")}
+        n, d0 = len(ys), datetime.fromtimestamp(pts[0][0]).strftime("%m-%d")
+        if status in ("rising", "falling"):
+            txt = (f"{label} {fmt(cur)} {unit} now (fitted; latest daily value {fmt(ys[-1])}), {status} "
+                   f"{abs(slope):.{d + 1}f} {unit}/day (±{2 * se:.{d + 1}f}) over {n} days, and the last {FC_RECENT} days "
+                   f"still follow it; in a week about {fmt(r['proj'][-1][1])}")
+        elif status == "levelled":
+            txt = (f"{label} levelled off at about {fmt(cur)} {unit} (mean of the last {FC_RECENT} days); it "
+                   f"{'rose' if slope > 0 else 'fell'} from {fmt(ys[0])} on {d0} but the last {FC_RECENT} days "
+                   f"no longer follow that, so it isn't projected forward")
+        else:
+            txt = (f"{label} about {fmt(cur)} {unit} (mean of the last {FC_RECENT} days), steady: no clear trend over "
+                   f"{n} days (slope {slope:+.{d + 1}f}/day is within the day-to-day scatter of ±{sd:.{d + 1}f})")
+        c = r["cross"]
+        if c and c["days"] == 0:
+            txt += f"; {c['side']} your range ({lo:g}-{hi:g})"
+        elif c:
+            txt += f"; at this rate {c['side']} your range ({c['bound']:g}) in ~{c['days']:.0f} days ({c['date']})"
+        elif status in ("rising", "falling"):
+            txt += f"; stays inside your range ({lo:g}-{hi:g}) for at least {FC_CROSS_MAX} days"
+        if why:
+            txt += f" [trend restarted at the {why}]"
+        r["text"] = txt
+        res.append(r)
+    return {"now": now, "params": res,
+            "note": "Straight-line projection of the last week's daily values, only while the last 3 days still follow it. "
+                    "A heads-up, not advice: a dose change, water change or new test kit lot breaks it."}
+
+
+def forecast_report(db, now):
+    f = forecast(db, now)
+    print("\nWhere it's heading (next 7 days; projection of the last week's daily values, not advice):")
+    for r in f["params"]:
+        print(f"  {'HEADS UP: ' if r.get('cross') else ''}{r['text']}")
+
 # ---- Power and cost (Group 3c, 2026-10-12) -------------------------------------------------
 RATE = 0.217                     # $/kWh, Joe 2026-10-12
 POWER_FILE = DATA / "power.json"
@@ -1278,6 +1444,7 @@ def report(db, asof=None):
     maintenance(now)
     data_due_report(db, now)
     normal_day_report(db, now)
+    forecast_report(db, now)
     effects_report(db, now)
     jugs(now)
     supplies_report(now)
@@ -1307,6 +1474,9 @@ def main():
     lg.add_argument("--note")
     sub.add_parser("report").add_argument("--asof", help="'YYYY-MM-DD HH:MM': report as of then (backfill)")
     sub.add_parser("wc").add_argument("--minutes", type=int, default=120)
+    fc = sub.add_parser("forecast")
+    fc.add_argument("--asof", help="'YYYY-MM-DD HH:MM'")
+    fc.add_argument("--json", action="store_true")
     a = ap.parse_args()
     DATA.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(DB)
@@ -1332,6 +1502,12 @@ def main():
         db.execute("INSERT INTO events VALUES (?,?,?)", (t, "wc", t + a.minutes * 60))
         db.commit()
         print(f"water change logged; temp left out of stats for {a.minutes} min")
+    elif a.cmd == "forecast":
+        t = datetime.strptime(a.asof, "%Y-%m-%d %H:%M").timestamp() if a.asof else None
+        if a.json:
+            print(json.dumps(forecast(db, t), indent=1))
+        else:
+            forecast_report(db, int(t or time.time()))
     else:
         report(db, datetime.strptime(a.asof, "%Y-%m-%d %H:%M").timestamp() if a.asof else None)
 
