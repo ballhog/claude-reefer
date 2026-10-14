@@ -20,7 +20,7 @@ control target revised 2026-10-14 (see Group 4).
 - Group 4: scope settled 2026-10-13. LSSS GHL driver DONE and deployed 10-13 (item 0).
   **Revised 10-14:** switching is built against Joe's own LSSS outlet box, not the GHL (see "Control target").
   GHL API confirmed unable to switch sockets (manual, 10-14). Items 0-3 DONE 10-14; items 4-6 wait for the LSSS sign-in.
-- Group 5: item 1 (prediction window) DONE 10-14; ask anything next; coral growth story waits for photos.
+- Group 5: items 1-2 (prediction window, ask anything) DONE 10-14; coral growth story waits for photos.
 - Groups 6-8: roadmap sketched 2026-10-13. Group 7 has a full design doc (LSSS repo docs/GROUP-7-HARDEN-LSSS.md);
   the others get their own planning pass.
 - Group 9 (LSSS sign-in) was folded into Group 7 on 10-13; Group 9 reopened as a candidate-ideas list.
@@ -177,8 +177,19 @@ and confirmed by it the same day: the GHL API can't switch sockets, so the outle
    steady ~33.5. Backtest so far is thin (the Trident had a 09-14..10-04 outage): alk beat "stays the same" on 2 days,
    Ca on 5; Mg did worse and two Mg "above 1400" calls (10-10, 10-11) didn't come true, so crossing calls were limited
    to 7 days. Re-backtest scheduled 10-28 with ~3 weeks of clean data.
-2. Ask anything: plain-language questions across all joined data ("why did pH drop Tuesday night?"), cross-referencing
-   feeding, skimmer watts, room conditions, events. Extends "ask the schematic" to the whole system.
+2. DONE 10-14 (nz-home 43f8104): ask anything. The home-page chat (`/api/chat` without `equipment`) runs a tool loop
+   (max 8 rounds) with read-only lookups: `get_readings` (any sensor in `ASK_CATALOG`, any Hydros output, any daily
+   number; up to 60 days; min/max with times, median/mean, ~48-bucket series, every Trident result or output change),
+   `compare_windows` (two windows side by side) and `get_events` (maintenance, mixes, dose changes, hand tests, notes,
+   reef-log events with before/after effects, and the Hydros automatic water change as one line per day). Shows
+   "looking at ..." while it works. Instructions require, for why/is-this-normal questions: measure the change, compare
+   with the same hours on earlier days, check events and related readings, then answer with how strong the evidence is.
+   Tank facts in the prompt (pH follows CO2; 09:45 soda-ash alk dose; compare alk pre-dose; auto WC cycles all day).
+   No dose advice (tested with "how much should I cut calcium?": declined, gave numbers, suggested a hand test).
+   Tested: overnight pH drop (both probes, compared with the week's swing), "anything unusual in 3 days" (flagged
+   calcium), a date before the flow sensors existed (said so). ~8-20k tokens a question (the report is in the system
+   prompt), so roughly 15-30 questions a day inside the 300k cap. `NZ_ASK_MODEL` can point it at a bigger model.
+   Not yet: the Telegram bot's free-text questions still go to the mccrae reef-log assistant, not these lookups.
 3. Coral growth story: per-colony timeline from the photo log; growth over months linked to stability periods
    ("doubled in 90 days, after alk steadied"). Builds on the weekly photo review.
 

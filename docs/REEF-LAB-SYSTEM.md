@@ -42,7 +42,7 @@ shut down, not needed.
 
 ---
 
-## 0. How to use it (Joe's quick guide, rev 2026-10-14, Groups 1-3 + Group 4 items 0-3 + Group 5 item 1)
+## 0. How to use it (Joe's quick guide, rev 2026-10-14, Groups 1-3 + Group 4 items 0-3 + Group 5 items 1-2)
 
 The everyday "what does what" in plain words. The full technical reference is `docs/REEF-LAB-SYSTEM.md` in the
 claude-reefer repo (this guide is its section 0).
@@ -54,7 +54,7 @@ claude-reefer repo (this guide is its section 0).
 - **Alert strip** at the top: reef alerts in one line; tap to open them all.
 - **°C / °F** buttons top right (remembered per device).
 - **⚡ $/day chip** (top right, every page): what the Hydros-metered gear costs per day. Tap for the power panel (see below). Turns amber when a pump's watts drift.
-- **Ask Claude** box: questions about what's on the page. Self test (left) runs 10 pipeline checks.
+- **Ask Claude** box: ask anything about the reef or the lab. Besides what's on the page, Claude can now look back through the tank's recorded history (any sensor, Hydros output or daily number, up to 60 days, plus everything you logged) and shows *looking at …* while it does. Good questions: "why did pH drop last night?", "was anything unusual this week?", "how did salinity do after Sunday?". For a why-question it compares with the same hours on earlier days before calling anything normal, and says how strong the link is (timing isn't proof). Numbers come from the data, never invented; no dose advice. Each question uses roughly 8-20k of the 300k daily tokens. Self test (left) runs 10 pipeline checks.
 - **Where it's heading** (row under the gauges): alk (pre-dose), calcium, magnesium and salinity for the next 7 days. Each card shows the daily values, a dashed projection with its likely range, and one line: ▲/▼ with the value in a week, "levelled at", "steady", **amber** if it leaves your range within 7 days, **red** if it's already outside. A trend only counts if it's clearly bigger than the day-to-day scatter and the last 3 days still follow it. Tap a card for its 7-day chart. It's a heads-up, not dosing advice; a dose change or RO/DI add restarts it. The morning report has the same lines under "Where it's heading".
 
 ### The tank's normal day (Group 3)
@@ -136,10 +136,10 @@ claude-reefer repo (this guide is its section 0).
 - Anything odd: Telegram `status`, or Self test on the home page.
 
 ### What's next
-- Upgrade plan: `Claude Reefer Upgrade Plan` (repo: `docs/UPGRADE-PLAN.md`). Groups 1, 2 and 3 done; Group 4 items 0-3 and Group 5 item 1 (prediction window) done 10-14.
+- Upgrade plan: `Claude Reefer Upgrade Plan` (repo: `docs/UPGRADE-PLAN.md`). Groups 1, 2 and 3 done; Group 4 items 0-3 and Group 5 items 1-2 (prediction window, ask anything) done 10-14.
 - **Order agreed 10-14:** (1) Claude Reefer reads the GHL through the LSSS (done 10-14); (2) LSSS sign-in (Group 7); (3) switching with rules on your own outlet box, tested on the simulator first; (4) mixing pump as the first real device, then current alerts. (The GHL write question is settled: it can't switch sockets.)
 - **Group 4 (next):** done 10-14: GHL through the LSSS, replay slider, ask the schematic, weekly photo review. Left: mixing-pump on/off, outlet switching, right-now current alerts (all wait for the LSSS sign-in). Done 10-13: the LSSS's GHL driver. The mixing pump is on the Hydros today and **moves to the LSSS outlet box**. Switching goes Claude Reefer → LSSS (its rules, its veto) → outlet box, and waits for the LSSS sign-in (Group 7).
-- **Roadmap:** 5 = ask anything next (prediction window done), then the coral growth story once photos build up. 6 = LSSS integration with rules in both layers (LSSS holds the veto). **7 = harden the LSSS** (design: LSSS repo `docs/GROUP-7-HARDEN-LSSS.md`): extend the LSSS's existing fault service; never stop trying; a diagnostic ladder that finds the real broken link (your internet vs the controller); plain-language notices a reef sitter can follow; the LSSS sign-in. 8 = NFC tracking (chemicals/reagents, frag plugs). **9 = candidate ideas:** observer cameras on the display and sump tied to the chemistry and flow data (start: Amcrest IP5M-T1179EW-AI-V3; imaging on vincent, later an x86 mini PC), and reading how the livestock are doing.
+- **Roadmap:** 5 = coral growth story next, once photos build up (prediction window and ask anything done). 6 = LSSS integration with rules in both layers (LSSS holds the veto). **7 = harden the LSSS** (design: LSSS repo `docs/GROUP-7-HARDEN-LSSS.md`): extend the LSSS's existing fault service; never stop trying; a diagnostic ladder that finds the real broken link (your internet vs the controller); plain-language notices a reef sitter can follow; the LSSS sign-in. 8 = NFC tracking (chemicals/reagents, frag plugs). **9 = candidate ideas:** observer cameras on the display and sump tied to the chemistry and flow data (start: Amcrest IP5M-T1179EW-AI-V3; imaging on vincent, later an x86 mini PC), and reading how the livestock are doing.
 - **Product direction:** open reference hardware (temp probe, ATO, basic and heater-grade outlet boxes); see `Product Strategy - open reference hardware 2026-10-14`.
 - Open questions for you (Group 7): if a tunnel ever comes back, look-only or control when signed in; who else gets notices; how long before a notice; may notices suggest physical actions.
 - Power: tell Claude where the heaters and display lights are plugged in (if they can be metered, they join the panel).
