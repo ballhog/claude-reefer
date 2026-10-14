@@ -20,7 +20,8 @@ control target revised 2026-10-14 (see Group 4).
 - Group 4: scope settled 2026-10-13. LSSS GHL driver DONE and deployed 10-13 (item 0).
   **Revised 10-14:** switching is built against Joe's own LSSS outlet box, not the GHL (see "Control target").
   GHL API confirmed unable to switch sockets (manual, 10-14). Items 0-3 DONE 10-14; items 4-6 wait for the LSSS sign-in.
-- Groups 5-8: roadmap sketched 2026-10-13. Group 7 has a full design doc (LSSS repo docs/GROUP-7-HARDEN-LSSS.md);
+- Group 5: item 1 (prediction window) DONE 10-14; ask anything next; coral growth story waits for photos.
+- Groups 6-8: roadmap sketched 2026-10-13. Group 7 has a full design doc (LSSS repo docs/GROUP-7-HARDEN-LSSS.md);
   the others get their own planning pass.
 - Group 9 (LSSS sign-in) was folded into Group 7 on 10-13; Group 9 reopened as a candidate-ideas list.
 - Product direction (10-14): the outlet box / probe line as open reference hardware. See
@@ -81,9 +82,6 @@ never depend on a soft layer. Only "don't care if it's off" gear is a candidate 
 - Apex and Hydros: effectively read-only (cloud-mediated).
 - GHL ProfiLux (10.0.0.215): **cannot switch sockets (settled 10-14 from GHL API Reference v1.1,
   Equipment & Manuals/GHL).** See "GHL write capability" below.
-- Guardrails for any control: signed-in device only, press-and-hold to confirm, every switch logged,
-  safety auto-off timeout.
-- The old idea of feed pause / maintenance / water-change mode via GHL SPECIALFUNCTION is not in scope.
 
 ### GHL write capability (settled 2026-10-14)
 Both memories were right: the API has writes, just not to sockets.
@@ -100,6 +98,9 @@ Both memories were right: the API has writes, just not to sockets.
   and change nothing. Shares port 10002 with the LSSS poll (one client at a time).
 - Consequence: mixing pump on a GHL socket and GHL per-socket switching are dropped. GHL stays a read source
   (probes, flows, socket state and current) through the LSSS.
+- Guardrails for any control: signed-in device only, press-and-hold to confirm, every switch logged,
+  safety auto-off timeout.
+- The old idea of feed pause / maintenance / water-change mode via GHL SPECIALFUNCTION is not in scope.
 
 ### Control target (revised 2026-10-14)
 Joe: build the switching for **the LSSS outlet box we're designing**, not the GHL. Decided before the manual check,
@@ -159,9 +160,23 @@ and confirmed by it the same day: the GHL API can't switch sockets, so the outle
 - Shelly (or similar) current monitoring on circuits the Hydros doesn't see: true load/power picture, monitoring only,
   feeds item 6.
 
-## Group 5: understand the tank (the headliners)
-1. Prediction window: run the daily digest's drift forward. "Alk down a little each day for 5 days; at this rate
-   half a point low by Friday." Same engine as the digest, a new panel. (Dose numbers still come from scripts.)
+## Group 5: understand the tank (the headliners; IN PROGRESS)
+1. DONE 10-14 (claude-reefer 669bb6b, nz-home 1f698da): prediction window. `reefchem.forecast()` builds one value
+   per day for alk (last Trident result before the 09:45 dose), Ca and Mg (daily median of Trident results) and
+   salinity (Hydros daily median), over the last week. Rules, all script arithmetic:
+   - a trend is called only if the week's slope is >= 2 standard errors AND at least a practical minimum per week
+     (alk 0.1 dKH, Ca 5 ppm, Mg 15 ppm, salinity 0.1 ppt);
+   - it is projected forward only if the last 3 days still follow it; otherwise "levelled off" at the mean of the last
+     3 days (stops a rise that already ended being carried on), or "steady";
+   - range warnings only inside the projected 7 days (amber), or red if already outside;
+   - the window restarts at a dose change (dose-changes.json) or an RO/DI add (salinity).
+   Shown as "Where it's heading · next 7 days" under the home gauges (4 cards: daily dots, dashed projection with band,
+   tap for the 7-day chart; GET /api/forecast, 5-min cache) and as a section in the morning report.
+   `reefchem.py forecast [--asof 'YYYY-MM-DD HH:MM'] [--json]`. No dose numbers come out of it.
+   First reading 10-14: alk levelled ~7.27 (pre-dose), Ca levelled ~462 and above range, Mg steady ~1369, salinity
+   steady ~33.5. Backtest so far is thin (the Trident had a 09-14..10-04 outage): alk beat "stays the same" on 2 days,
+   Ca on 5; Mg did worse and two Mg "above 1400" calls (10-10, 10-11) didn't come true, so crossing calls were limited
+   to 7 days. Re-backtest scheduled 10-28 with ~3 weeks of clean data.
 2. Ask anything: plain-language questions across all joined data ("why did pH drop Tuesday night?"), cross-referencing
    feeding, skimmer watts, room conditions, events. Extends "ask the schematic" to the whole system.
 3. Coral growth story: per-colony timeline from the photo log; growth over months linked to stability periods

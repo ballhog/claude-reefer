@@ -42,7 +42,7 @@ shut down, not needed.
 
 ---
 
-## 0. How to use it (Joe's quick guide, rev 2026-10-14, Groups 1-3 + Group 4 items 0-3)
+## 0. How to use it (Joe's quick guide, rev 2026-10-14, Groups 1-3 + Group 4 items 0-3 + Group 5 item 1)
 
 The everyday "what does what" in plain words. The full technical reference is `docs/REEF-LAB-SYSTEM.md` in the
 claude-reefer repo (this guide is its section 0).
@@ -55,6 +55,7 @@ claude-reefer repo (this guide is its section 0).
 - **°C / °F** buttons top right (remembered per device).
 - **⚡ $/day chip** (top right, every page): what the Hydros-metered gear costs per day. Tap for the power panel (see below). Turns amber when a pump's watts drift.
 - **Ask Claude** box: questions about what's on the page. Self test (left) runs 10 pipeline checks.
+- **Where it's heading** (row under the gauges): alk (pre-dose), calcium, magnesium and salinity for the next 7 days. Each card shows the daily values, a dashed projection with its likely range, and one line: ▲/▼ with the value in a week, "levelled at", "steady", **amber** if it leaves your range within 7 days, **red** if it's already outside. A trend only counts if it's clearly bigger than the day-to-day scatter and the last 3 days still follow it. Tap a card for its 7-day chart. It's a heads-up, not dosing advice; a dose change or RO/DI add restarts it. The morning report has the same lines under "Where it's heading".
 
 ### The tank's normal day (Group 3)
 - **Normal-for-this-time ribbon:** on a 24 h history chart, a shaded band behind today's line shows what this sensor usually does at each half hour (middle 80% of the last 21 days). Today's line outside the ribbon = unusual for the time of day, even if it's inside your target range.
@@ -107,7 +108,7 @@ claude-reefer repo (this guide is its section 0).
 - **Evening check-in, 8 pm:** 🐟 Fed · 🌊 Water change (then gallons) · 🧪 Mixed a jug (then which) · 🔧 Maintenance (then which task) · 👍 Nothing else, then ✔ Done. Tap as many as fit; it shows what was already logged today so nothing gets double-entered.
 - **Supplies:** plain words work: `supplies: 6 x 55 lb boxes reef salt, 40 lb calcium chloride`, `received epsom 5 lb` (adds to what's there), `have 1000 ml left in the mg jug`; units g/kg/lb/oz, ml/L/gal, bags/bottles/rolls (needs the pack size in supplies.md). `supplies` = full list, `shopping list` = only what to order. **Sunday ~9 am** the shopping list arrives on its own.
 - **devices** = signed-in devices, each with a Sign out button.
-- **Morning:** report at 06:25 (now with normal-day, after-events and power sections), Claude Reefer daily log to Telegram at 06:30 (👍/👎 buttons). Things logged on the home page go into it too.
+- **Morning:** report at 06:25 (with normal-day, where-it's-heading, after-events and power sections), Claude Reefer daily log to Telegram at 06:30 (👍/👎 buttons). Things logged on the home page go into it too.
 - **Alerts** ("Reef alert: …"): feed silent, return flow low, salinity near the top, jug low, Trident stalled, plus **instrument watch**: probe fault (impossible reading), frozen sensor (same value 6 h), probe drift (the gap between two probes changed), Trident skipped an alk run (it learned the run times: ~00:20, 06:15, 12:40, 18:20). Sent once, reminded every 12 h, "cleared" when fixed. Quiet 22:00-07:00 (held until morning).
 - **Voice:** iPhone Shortcut "Reefer" (works on Tailscale away from home).
 
@@ -135,10 +136,10 @@ claude-reefer repo (this guide is its section 0).
 - Anything odd: Telegram `status`, or Self test on the home page.
 
 ### What's next
-- Upgrade plan: `Claude Reefer Upgrade Plan` (repo: `docs/UPGRADE-PLAN.md`). Groups 1, 2 and 3 done; Group 4 items 0-3 done 10-14.
+- Upgrade plan: `Claude Reefer Upgrade Plan` (repo: `docs/UPGRADE-PLAN.md`). Groups 1, 2 and 3 done; Group 4 items 0-3 and Group 5 item 1 (prediction window) done 10-14.
 - **Order agreed 10-14:** (1) Claude Reefer reads the GHL through the LSSS (done 10-14); (2) LSSS sign-in (Group 7); (3) switching with rules on your own outlet box, tested on the simulator first; (4) mixing pump as the first real device, then current alerts. (The GHL write question is settled: it can't switch sockets.)
 - **Group 4 (next):** done 10-14: GHL through the LSSS, replay slider, ask the schematic, weekly photo review. Left: mixing-pump on/off, outlet switching, right-now current alerts (all wait for the LSSS sign-in). Done 10-13: the LSSS's GHL driver. The mixing pump is on the Hydros today and **moves to the LSSS outlet box**. Switching goes Claude Reefer → LSSS (its rules, its veto) → outlet box, and waits for the LSSS sign-in (Group 7).
-- **Roadmap:** 5 = prediction window, ask anything, coral growth story. 6 = LSSS integration with rules in both layers (LSSS holds the veto). **7 = harden the LSSS** (design: LSSS repo `docs/GROUP-7-HARDEN-LSSS.md`): extend the LSSS's existing fault service; never stop trying; a diagnostic ladder that finds the real broken link (your internet vs the controller); plain-language notices a reef sitter can follow; the LSSS sign-in. 8 = NFC tracking (chemicals/reagents, frag plugs). **9 = candidate ideas:** observer cameras on the display and sump tied to the chemistry and flow data (start: Amcrest IP5M-T1179EW-AI-V3; imaging on vincent, later an x86 mini PC), and reading how the livestock are doing.
+- **Roadmap:** 5 = ask anything next (prediction window done), then the coral growth story once photos build up. 6 = LSSS integration with rules in both layers (LSSS holds the veto). **7 = harden the LSSS** (design: LSSS repo `docs/GROUP-7-HARDEN-LSSS.md`): extend the LSSS's existing fault service; never stop trying; a diagnostic ladder that finds the real broken link (your internet vs the controller); plain-language notices a reef sitter can follow; the LSSS sign-in. 8 = NFC tracking (chemicals/reagents, frag plugs). **9 = candidate ideas:** observer cameras on the display and sump tied to the chemistry and flow data (start: Amcrest IP5M-T1179EW-AI-V3; imaging on vincent, later an x86 mini PC), and reading how the livestock are doing.
 - **Product direction:** open reference hardware (temp probe, ATO, basic and heater-grade outlet boxes); see `Product Strategy - open reference hardware 2026-10-14`.
 - Open questions for you (Group 7): if a tunnel ever comes back, look-only or control when signed in; who else gets notices; how long before a notice; may notices suggest physical actions.
 - Power: tell Claude where the heaters and display lights are plugged in (if they can be metered, they join the panel).
