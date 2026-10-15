@@ -7,6 +7,10 @@
   reefchem.py forecast [--asof T] [--json]  where alk/Ca/Mg/salinity are heading (prediction window)
 """
 import argparse, csv, io, json, sqlite3, statistics, sys, time, urllib.request
+try:  # LSSS machine key on every call to the LSSS (LSSS sign-in, 2026-10-14); harmless with no key
+    __import__("sys").path.insert(0, "/opt/reefcore"); import lsss_auth  # noqa: E402,F401
+except Exception:
+    pass
 from datetime import datetime
 from pathlib import Path
 

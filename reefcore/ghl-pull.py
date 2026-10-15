@@ -22,6 +22,10 @@ every 5 min. `pull` stores everything once.
                         it competes with the LSSS for the controller's single connection)
 """
 import json, socket, sqlite3, sys, time, urllib.request
+try:  # LSSS machine key on every call to the LSSS (LSSS sign-in, 2026-10-14); harmless with no key
+    __import__("sys").path.insert(0, "/opt/reefcore"); import lsss_auth  # noqa: E402,F401
+except Exception:
+    pass
 
 LSSS_URL = "http://10.0.0.228:8000/api/ghl/live"
 MAX_AGE_S = 180                               # LSSS polls ~1/min; older than this = treat as no data

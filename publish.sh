@@ -7,7 +7,7 @@ cd /opt/claude-reefer
 cp -p /opt/reefcore/*.py /opt/reefcore/*.sh reefcore/ 2>/dev/null || true
 cp /root/reef-lab/.code-drop/mccrae/* mccrae/ 2>/dev/null || true
 for f in hydros-pull reefchem-pull reef-report; do cp -p /etc/cron.d/$f cron/$f 2>/dev/null || true; done
-if grep -rIl -E "AAE[A-Za-z0-9_-]{30}|sk-ant-|BEGIN (OPENSSH|RSA) PRIVATE|[0-9]{9,10}:AA[A-Za-z0-9_-]{30}" reefcore mccrae cron; then
+if grep -rIl -E "AAE[A-Za-z0-9_-]{30}|lsk_[A-Za-z0-9_-]{20}|sk-ant-|BEGIN (OPENSSH|RSA) PRIVATE|[0-9]{9,10}:AA[A-Za-z0-9_-]{30}" reefcore mccrae cron; then
   echo "SECRET-LOOKING TEXT FOUND, not committing"; exit 1; fi
 git add -A
 git -c user.name=ballhog -c user.email=ballhog@users.noreply.github.com commit -q -m "${1:-Update from live code}

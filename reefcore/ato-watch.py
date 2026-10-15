@@ -10,6 +10,10 @@ of these each 5-minute cron run, so coverage is continuous. senseValue 0 = water
   ato-watch.py runs [H]        top-off runs in the last H hours (default 24)
 """
 import fcntl, json, sqlite3, sys, time, urllib.request
+try:  # LSSS machine key on every call to the LSSS (LSSS sign-in, 2026-10-14); harmless with no key
+    __import__("sys").path.insert(0, "/opt/reefcore"); import lsss_auth  # noqa: E402,F401
+except Exception:
+    pass
 
 LSSS = "http://10.0.0.228:8000/api/hydros/live"
 DB = "/root/reef-lab/data/hydros.db"
