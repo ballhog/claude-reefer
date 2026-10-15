@@ -37,6 +37,9 @@ EXPECTED_OVERRIDES = DATA / "expected-overrides.txt"   # one output name per lin
 HAND = {"alk": "alk", "ca": "calc", "calc": "calc", "mg": "mag", "mag": "mag",
         "ph": "ph", "temp": "temp", "sal": "salinity", "no3": "no3", "po4": "po4"}
 H, D = 3600, 86400
+ATO_ML_MIN = 81.0   # Kamoer peristaltic ATO pump, Joe measured 1 min into a cup 2026-10-14
+GAL_L = 3.78541
+ATO_MAX_RUN = 3 * 3600   # an ATO run longer than this is a logging gap; that day gets no gallons
 
 
 def baselines():
@@ -588,6 +591,53 @@ def _q(vs, f):
     return vs[min(len(vs) - 1, int(f * (len(vs) - 1) + .5))] if vs else None
 
 
+def ato_seconds(t0, t1, windows=()):
+    """ATO run seconds inside [t0, t1) from ato-watch.py's table, and how many of them fall in `windows`
+    [(a, b, ...)] (water changes). None if the watcher was not logging yet at t0."""
+    h = sqlite3.connect(f"file:{DATA / 'hydros.db'}?mode=ro", uri=True, timeout=10)
+    try:
+        first = h.execute("SELECT MIN(ts) FROM ato").fetchone()[0]
+        if first is None or first > t0 + H:
+            return None
+        rows = h.execute("SELECT ts, value FROM ato WHERE ts<? ORDER BY ts", (t1,)).fetchall()
+    finally:
+        h.close()
+    merged = []
+    for a, b, *_ in sorted(windows):
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    tot = inwc = 0
+    bad = False
+    def add(a, b):
+        nonlocal tot, inwc, bad
+        if b - a > ATO_MAX_RUN and min(b, t1) > max(a, t0):
+            bad = True   # longer than any real top-off: a watcher/feed gap, not water
+        a, b = max(a, t0), min(b, t1)
+        if b > a:
+            tot += b - a
+            inwc += sum(max(0, min(b, y) - max(a, x)) for x, y in merged)
+    start = None
+    for ts, v in rows:
+        if v == 0 and start is None:
+            start = ts
+        elif v == 1 and start is not None:
+            add(start, ts)
+            start = None
+    if start is not None:
+        add(start, min(t1, time.time()))
+    return None if bad else (tot, inwc)
+
+
+def ato_gal(t0, t1, windows=()):
+    """(total gal, gal inside windows) of RO/DI the ATO pumped in [t0, t1); None if no watcher data."""
+    r = ato_seconds(t0, t1, windows)
+    if r is None:
+        return None
+    return tuple(round(s / 60 * ATO_ML_MIN / 1000 / GAL_L, 2) for s in r)
+
+
 def daily_numbers(db, day):
     """One day's numbers (local date 'YYYY-MM-DD') -> {metric: value}."""
     t0 = int(datetime.fromisoformat(day).timestamp())
@@ -622,6 +672,12 @@ def daily_numbers(db, day):
         h.close()
     except Exception:
         pass
+    try:   # ATO gallons (run time x ATO_ML_MIN); evaporation = top-off outside water-change windows
+        g = ato_gal(t0, t1, wcs)
+        if g is not None:
+            out["ato_gal"], out["ato_evap_gal"] = g[0], round(g[0] - g[1], 2)
+    except Exception:
+        pass
     return out
 
 
@@ -630,6 +686,8 @@ DAILY_NAMES = {"ph_swing": ("pH swing per day (Apex)", ""), "ph_hydros_swing": (
                "sal_median": ("salinity, daily median", "ppt"), "sal_drift": ("salinity drift per day", "ppt"),
                "flow320_med": ("320 return, daily median", "L/h"), "flowA_med": ("200 return A, daily median", "L/h"),
                "flowB_med": ("200 return B, daily median", "L/h"), "ato_runs": ("ATO runs per day", ""),
+               "ato_gal": ("ATO top-off per day (RO/DI)", "gal"),
+               "ato_evap_gal": ("evaporation per day (ATO top-off outside water changes)", "gal"),
                "skimmer_w": ("skimmer watts, daily median", "W")}
 
 
@@ -675,7 +733,7 @@ def normal_day_report(db, now):
                                   (str(datetime.fromtimestamp(now - 15 * D).date()),)):
             rows.setdefault(k, {})[d] = v
         lines = []
-        for k in ("ph_swing", "ph_hydros_swing", "temp_swing", "ato_runs", "sal_drift", "skimmer_w"):
+        for k in ("ph_swing", "ph_hydros_swing", "temp_swing", "ato_runs", "ato_gal", "ato_evap_gal", "sal_drift", "skimmer_w"):
             r = rows.get(k, {})
             past = [v for d, v in r.items() if d < today]
             yday = r.get(str(datetime.fromtimestamp(now - D).date()))
@@ -1013,7 +1071,15 @@ def salinity_drift(db, now):
             after = [v for ts, v in pts if a <= ts <= (b or a) + 20 * 60]
             if before and after:
                 dips.append(min(after) - statistics.median(before))
-        print(f"  ATO top-off (15 s watcher): {len(r24)} runs, {sum(s for *_, s in r24) / 60:.1f} min total in 24h"
+        m24 = sum(s for *_, s in r24) / 60
+        g24 = None
+        try:
+            g24 = ato_gal(now - D, now, wc_events(db, now - D))
+        except Exception:
+            pass
+        print(f"  ATO top-off (15 s watcher): {len(r24)} runs, {m24:.1f} min total in 24h"
+              + (f" = {g24[0]:.2f} gal RO/DI at {ATO_ML_MIN:g} ml/min"
+                 + (f" ({g24[0] - g24[1]:.2f} gal outside water changes = evaporation)" if g24[1] else "") if g24 else "")
               + (f", typical run {statistics.median(s for *_, s in r24):.0f} s" if r24 else "")
               + (f"; {len(fine) / span:.1f} runs/day since {datetime.fromtimestamp(first):%m-%d}" if span > 1.5 else "")
               + (f"; salinity change right after a run: median {statistics.median(dips):+.2f} ppt (n={len(dips)})"
